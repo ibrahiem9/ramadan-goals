@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Ramadan Goals</title>
+    <meta
+      name="description"
+      content="Ramadan Goals - a mobile-first app for daily goal tracking and progress."
+    >
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        min-height: 100%;
+        background: #0c1222;
+        color: #fff;
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      }
+
+      #root {
+        min-height: 100vh;
+      }
+
+      .boot-error {
+        max-width: 720px;
+        margin: 2rem auto;
+        padding: 1rem 1.25rem;
+        border-radius: 10px;
+        border: 1px solid rgba(239, 68, 68, 0.4);
+        background: rgba(239, 68, 68, 0.08);
+        line-height: 1.5;
+      }
+    </style>
+    <script src="https://unpkg.com/@babel/standalone@7.26.2/babel.min.js"></script>
+    <script type="importmap">
+      {
+        "imports": {
+          "react": "https://esm.sh/react@18.3.1",
+          "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
+          "react/jsx-runtime": "https://esm.sh/react@18.3.1/jsx-runtime"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <noscript>This app requires JavaScript to run.</noscript>
+    <script type="module">
+      const rootEl = document.getElementById("root");
+
+      // Polyfill storage API for local/browser hosting environments.
+      if (!window.storage) {
+        window.storage = {
+          async get(key) {
+            const value = localStorage.getItem(key);
+            return value === null ? null : { value };
+          },
+          async set(key, value) {
+            localStorage.setItem(key, value);
+          }
+        };
+      }
+
+      async function bootstrap() {
+        const [{ default: React }, { createRoot }] = await Promise.all([
+          import("react"),
+          import("react-dom/client")
+        ]);
+
+        const sourceResp = await fetch("./main.jsx", { cache: "no-store" });
+        if (!sourceResp.ok) {
+          throw new Error(`Unable to load main.jsx (${sourceResp.status})`);
+        }
+
+        const source = await sourceResp.text();
+        const transformed = Babel.transform(source, {
+          filename: "main.jsx",
+          sourceType: "module",
+          presets: [["react", { runtime: "automatic" }]]
+        }).code;
+
+        const moduleBlob = new Blob([transformed], { type: "text/javascript" });
+        const moduleUrl = URL.createObjectURL(moduleBlob);
+
+        try {
+          const mod = await import(moduleUrl);
+          const App = mod.default;
+          createRoot(rootEl).render(React.createElement(App));
+        } finally {
+          URL.revokeObjectURL(moduleUrl);
+        }
+      }
+
+      bootstrap().catch((error) => {
+        console.error("Failed to bootstrap app:", error);
+        rootEl.innerHTML = `
+          <div class="boot-error">
+            <strong>App failed to start.</strong><br>
+            Check browser console for details.
+          </div>
+        `;
+      });
+    </script>
+  </body>
+</html>
