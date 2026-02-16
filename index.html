@@ -77,6 +77,24 @@
         };
       }
 
+      // Rewrite absolute /src/* imports so blob-based module loading resolves via HTTP(S).
+      function getSrcBaseUrl() {
+        return new URL("./src/", window.location.href).href;
+      }
+
+      function rewriteSrcImportSpecifiers(source, srcBaseUrl) {
+        const toAbsoluteSrcUrl = (path) => `${srcBaseUrl}${path}`;
+        return source
+          .replace(
+            /(from\s+)(['"])\/src\/([^'"]+)\2/g,
+            (_, prefix, quote, path) => `${prefix}${quote}${toAbsoluteSrcUrl(path)}${quote}`
+          )
+          .replace(
+            /(import\s*\(\s*)(['"])\/src\/([^'"]+)\2(\s*\))/g,
+            (_, prefix, quote, path, suffix) => `${prefix}${quote}${toAbsoluteSrcUrl(path)}${quote}${suffix}`
+          );
+      }
+
       async function bootstrap() {
         const [{ default: React }, { createRoot }] = await Promise.all([
           import("react"),
@@ -89,7 +107,9 @@
         }
 
         const source = await sourceResp.text();
-        const transformed = Babel.transform(source, {
+        const srcBaseUrl = getSrcBaseUrl();
+        const rewrittenSource = rewriteSrcImportSpecifiers(source, srcBaseUrl);
+        const transformed = Babel.transform(rewrittenSource, {
           filename: "main.jsx",
           sourceType: "module",
           presets: [["react", { runtime: "automatic" }]]
@@ -108,10 +128,28 @@
       }
 
       bootstrap().catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        const isModuleSpecifierError = message.includes("Failed to resolve module specifier");
+        const failureType = isModuleSpecifierError
+          ? "module-specifier-resolution"
+          : "transform-or-runtime";
+
         console.error("Failed to bootstrap app:", error);
+        console.info(`Bootstrap failure type: ${failureType}`);
+        if (isModuleSpecifierError) {
+          console.info(
+            "Bootstrap hint: /src/* imports must resolve to HTTP(S) URLs when main.jsx is imported from a blob URL."
+          );
+        }
+
+        const primaryHint = isModuleSpecifierError
+          ? "Bootstrap could not resolve app module paths. Hard-refresh and verify deployed src/* assets return 200."
+          : "The app hit a startup error while transforming or importing main.jsx.";
         rootEl.innerHTML = `
           <div class="boot-error">
             <strong>App failed to start.</strong><br>
+            ${primaryHint}<br>
+            Note: ERR_BLOCKED_BY_CLIENT for Bugsnag/Segment is usually extension blocking and often non-fatal.<br>
             Check browser console for details.
           </div>
         `;
