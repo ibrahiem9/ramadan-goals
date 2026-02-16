@@ -34,12 +34,23 @@
       }
     </style>
     <script src="https://unpkg.com/@babel/standalone@7.26.2/babel.min.js"></script>
+    <script>
+      // Configure these values for production deployments (e.g. Netlify script injection).
+      window.__APP_CONFIG__ = window.__APP_CONFIG__ || {
+        SUPABASE_URL: "",
+        SUPABASE_ANON_KEY: "",
+        RAMADAN_DEFAULT_CITY: "",
+        RAMADAN_DEFAULT_COUNTRY: "",
+        ALADHAN_BASE_URL: "https://api.aladhan.com/v1"
+      };
+    </script>
     <script type="importmap">
       {
         "imports": {
           "react": "https://esm.sh/react@18.3.1",
           "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
-          "react/jsx-runtime": "https://esm.sh/react@18.3.1/jsx-runtime"
+          "react/jsx-runtime": "https://esm.sh/react@18.3.1/jsx-runtime",
+          "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2.49.4"
         }
       }
     </script>
@@ -59,6 +70,9 @@
           },
           async set(key, value) {
             localStorage.setItem(key, value);
+          },
+          async removeItem(key) {
+            localStorage.removeItem(key);
           }
         };
       }

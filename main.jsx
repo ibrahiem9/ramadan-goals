@@ -1,118 +1,24 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 
-const STORAGE_KEY = "ramadan-goals-v1";
-const CURRENT_YEAR = 2026;
-const RAMADAN_START = "2026-02-27";
-const RAMADAN_END = "2026-03-28";
+import {
+  CURRENT_YEAR,
+  DEFAULT_APP_DATA,
+  RAMADAN_DEFAULT_CITY,
+  RAMADAN_DEFAULT_COUNTRY,
+  STORAGE_KEY,
+} from "/src/constants/app.js";
+import { TEMPLATES } from "/src/constants/templates.js";
+import { getDaysInRange, getRamadanDay, todayStr } from "/src/lib/date.js";
+import { generateId } from "/src/lib/ids.js";
+import { validateRamadanWindow } from "/src/lib/ramadanResolver.js";
+import { useRamadanWindow } from "/src/hooks/useRamadanWindow.js";
+import { useStorage } from "/src/hooks/useStorage.js";
+import { useSupabaseSocial } from "/src/social/useSupabaseSocial.js";
 
-// ─── Helpers ────────────────────────────────────────
-const pad2 = n => String(n).padStart(2, '0');
-function localDateStr(d) {
-  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
-}
+const RAMADAN_SOURCE_MODES = ["global", "location", "manual"];
 
-function parseLocalDate(str) {
-  const [y, m, d] = str.split('-').map(Number);
-  return new Date(y, m - 1, d);
-}
-
-function getRamadanDay(dateStr) {
-  const start = parseLocalDate(RAMADAN_START);
-  const d = parseLocalDate(dateStr);
-  const diff = Math.floor((d - start) / 86400000) + 1;
-  return diff >= 1 && diff <= 30 ? diff : null;
-}
-
-function todayStr() {
-  return localDateStr(new Date());
-}
-
-function generateId() {
-  return Math.random().toString(36).slice(2, 10);
-}
-
-function getDaysInRange(start, end) {
-  const days = [];
-  let d = parseLocalDate(start);
-  const e = parseLocalDate(end);
-  while (d <= e) {
-    days.push(localDateStr(d));
-    d.setDate(d.getDate() + 1);
-  }
-  return days;
-}
-
-// ─── Checkin Migration (index-keyed → UUID-keyed) ──
-function migrateCheckins(checkins, goals) {
-  if (!checkins || checkins._migrated) return checkins;
-  const migrated = {};
-  Object.keys(checkins).forEach(dateStr => {
-    const dayData = checkins[dateStr];
-    if (!dayData || typeof dayData !== 'object') return;
-    const newDay = {};
-    Object.keys(dayData).forEach(key => {
-      const idx = parseInt(key, 10);
-      if (!isNaN(idx) && idx >= 0 && idx < goals.length) {
-        newDay[goals[idx].id] = dayData[key];
-      } else {
-        newDay[key] = dayData[key];
-      }
-    });
-    migrated[dateStr] = newDay;
-  });
-  migrated._migrated = true;
-  return migrated;
-}
-
-// ─── Default Templates ─────────────────────────────
-const TEMPLATES = [
-  { title: "Salah on time", icon: "🕌", type: "boolean", target: 1, unit: "" },
-  { title: "Qur'an pages", icon: "📖", type: "count", target: 5, unit: "pages" },
-  { title: "Taraweeh", icon: "🌙", type: "boolean", target: 1, unit: "" },
-  { title: "Dhikr", icon: "📿", type: "count", target: 100, unit: "times" },
-  { title: "Sadaqah", icon: "💝", type: "boolean", target: 1, unit: "" },
-  { title: "Dua for others", icon: "🤲", type: "boolean", target: 1, unit: "" },
-  { title: "Water intake (Suhoor)", icon: "💧", type: "count", target: 8, unit: "cups" },
-  { title: "Avoid backbiting", icon: "🤐", type: "boolean", target: 1, unit: "" },
-];
-
-// ─── Persistent Storage Hook ────────────────────────
-function useStorage() {
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    async function load() {
-      try {
-        const result = await window.storage.get(STORAGE_KEY);
-        if (result && result.value) {
-          const parsed = JSON.parse(result.value);
-          if (parsed.goals && parsed.checkins && !parsed.checkins._migrated) {
-            parsed.checkins = migrateCheckins(parsed.checkins, parsed.goals);
-            await window.storage.set(STORAGE_KEY, JSON.stringify(parsed));
-          }
-          setData(parsed);
-        } else {
-          setData({ goals: [], checkins: {}, groups: [], userName: "" });
-        }
-      } catch {
-        setData({ goals: [], checkins: {}, groups: [], userName: "" });
-      }
-      setLoading(false);
-    }
-    load();
-  }, []);
-
-  const save = useCallback(async (newData) => {
-    setData(newData);
-    try {
-      await window.storage.set(STORAGE_KEY, JSON.stringify(newData));
-    } catch (e) {
-      console.error("Storage save failed:", e);
-    }
-  }, []);
-
-  return { data, save, loading };
+function normalizeRamadanSourceMode(mode) {
+  return RAMADAN_SOURCE_MODES.includes(mode) ? mode : "global";
 }
 
 // ─── Animated Counter ───────────────────────────────
@@ -146,7 +52,6 @@ function AnimatedNumber({ value, max }) {
 function GoalCard({ goal, value, onTap, onLongPress, completed }) {
   const [pressed, setPressed] = useState(false);
   const [celebrate, setCelebrate] = useState(false);
-  const timerRef = useRef(null);
   const longRef = useRef(null);
 
   const handleDown = () => {
@@ -236,8 +141,8 @@ function GoalCard({ goal, value, onTap, onLongPress, completed }) {
 }
 
 // ─── Heatmap ────────────────────────────────────────
-function Heatmap({ checkins, goals, onDayTap }) {
-  const days = getDaysInRange(RAMADAN_START, RAMADAN_END);
+function Heatmap({ checkins, goals, onDayTap, ramadanWindow }) {
+  const days = getDaysInRange(ramadanWindow.start, ramadanWindow.end);
   const today = todayStr();
 
   return (
@@ -283,9 +188,14 @@ function Heatmap({ checkins, goals, onDayTap }) {
 }
 
 // ─── Goal Streak Badge ──────────────────────────────
-function StreakBadge({ checkins, goalId, goal }) {
+function StreakBadge({ checkins, goalId, goal, ramadanWindow }) {
   let streak = 0;
-  const days = getDaysInRange(RAMADAN_START, todayStr());
+  const boundedToday = todayStr() < ramadanWindow.start
+    ? ramadanWindow.start
+    : todayStr() > ramadanWindow.end
+      ? ramadanWindow.end
+      : todayStr();
+  const days = getDaysInRange(ramadanWindow.start, boundedToday);
   for (let i = days.length - 1; i >= 0; i--) {
     const dc = checkins[days[i]];
     if (dc && dc[goalId] >= goal.target) streak++;
@@ -505,15 +415,49 @@ function EditValueModal({ goal, value, onSave, onDelete, onClose }) {
 }
 
 // ─── Settings Modal ────────────────────────────────
-function SettingsModal({ data, save, onClose, onReset }) {
+function SettingsModal({ data, save, ramadanWindow, ramadanTools, onClose, onReset }) {
   const [editName, setEditName] = useState(data.userName);
   const [confirmReset, setConfirmReset] = useState(false);
+  const [sourceMode, setSourceMode] = useState(
+    normalizeRamadanSourceMode(data.ramadan?.sourceMode || ramadanTools.ramadanSourceMode)
+  );
+  const [locationCity, setLocationCity] = useState(data.ramadan?.locationCity || RAMADAN_DEFAULT_CITY);
+  const [locationCountry, setLocationCountry] = useState(data.ramadan?.locationCountry || RAMADAN_DEFAULT_COUNTRY);
+  const [manualStart, setManualStart] = useState(data.ramadan?.manualStart || "");
+  const [manualEnd, setManualEnd] = useState(data.ramadan?.manualEnd || "");
+  const [ramadanMessage, setRamadanMessage] = useState("");
   const nameDirty = editName.trim() && editName.trim() !== data.userName;
 
   const handleSaveName = () => {
     if (nameDirty) {
       save({ ...data, userName: editName.trim() });
     }
+  };
+
+  const handleSaveRamadanMode = async () => {
+    setRamadanMessage("");
+
+    if (sourceMode === "manual") {
+      const result = ramadanTools.saveManualRamadanWindow(manualStart.trim(), manualEnd.trim());
+      if (!result.ok) {
+        setRamadanMessage(result.error);
+        return;
+      }
+      setRamadanMessage("Manual Ramadan dates saved.");
+      return;
+    }
+
+    if (sourceMode === "location") {
+      if (!locationCity.trim() || !locationCountry.trim()) {
+        setRamadanMessage("City and country are required for location mode.");
+        return;
+      }
+      ramadanTools.updateRamadanLocation(locationCity.trim(), locationCountry.trim());
+    }
+
+    ramadanTools.setRamadanSourceMode(sourceMode);
+    ramadanTools.retryRamadanResolve();
+    setRamadanMessage("Ramadan date source updated.");
   };
 
   const handleReset = async () => {
@@ -534,7 +478,8 @@ function SettingsModal({ data, save, onClose, onReset }) {
     }} onClick={onClose}>
       <div onClick={e => e.stopPropagation()} style={{
         background: "linear-gradient(180deg, #1e293b, #0f172a)",
-        borderRadius: 24, padding: "28px 24px", width: "85%", maxWidth: 360,
+        borderRadius: 24, padding: "28px 24px", width: "88%", maxWidth: 380,
+        maxHeight: "85vh", overflow: "auto",
         animation: "scaleIn 0.25s cubic-bezier(.4,0,.2,1)",
       }}>
         <h3 style={{
@@ -542,7 +487,6 @@ function SettingsModal({ data, save, onClose, onReset }) {
           fontFamily: "'Playfair Display', serif", marginBottom: 24, textAlign: "center",
         }}>Settings</h3>
 
-        {/* Name editing */}
         <div style={{ marginBottom: 24 }}>
           <div style={{
             fontSize: 12, fontWeight: 600, color: "rgba(255,255,255,0.4)",
@@ -574,7 +518,125 @@ function SettingsModal({ data, save, onClose, onReset }) {
           </div>
         </div>
 
-        {/* Reset */}
+        <div style={{ marginBottom: 24 }}>
+          <div style={{
+            fontSize: 12, fontWeight: 600, color: "rgba(255,255,255,0.4)",
+            fontFamily: "'DM Sans', sans-serif", marginBottom: 8, textTransform: "uppercase",
+            letterSpacing: "0.05em",
+          }}>Ramadan Dates</div>
+          <div style={{
+            fontSize: 12, color: "rgba(255,255,255,0.55)", marginBottom: 10,
+            fontFamily: "'DM Sans', sans-serif",
+          }}>
+            Current window: {ramadanWindow.start} to {ramadanWindow.end} ({ramadanWindow.seasonYear})
+          </div>
+          <div style={{
+            fontSize: 12, color: "rgba(255,255,255,0.45)", marginBottom: 10,
+            fontFamily: "'DM Sans', sans-serif",
+          }}>
+            Status: {ramadanTools.ramadanStatus}
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 10 }}>
+            {RAMADAN_SOURCE_MODES.map((mode) => (
+              <button key={mode} onClick={() => setSourceMode(mode)} style={{
+                display: "flex", justifyContent: "space-between", alignItems: "center",
+                background: sourceMode === mode ? "rgba(34,197,94,0.12)" : "rgba(255,255,255,0.04)",
+                border: sourceMode === mode ? "1px solid rgba(34,197,94,0.35)" : "1px solid rgba(255,255,255,0.08)",
+                borderRadius: 12, padding: "10px 12px", cursor: "pointer", color: "#fff",
+                fontFamily: "'DM Sans', sans-serif", textTransform: "capitalize",
+              }}>
+                <span>{mode === "global" ? "Global API" : mode === "location" ? "Location-Based API" : "Manual Dates"}</span>
+                <span>{sourceMode === mode ? "✓" : ""}</span>
+              </button>
+            ))}
+          </div>
+
+          {sourceMode === "location" && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 10 }}>
+              <input
+                placeholder="City"
+                value={locationCity}
+                onChange={(e) => setLocationCity(e.target.value)}
+                style={{
+                  width: "100%", background: "rgba(255,255,255,0.08)",
+                  border: "1px solid rgba(255,255,255,0.12)", borderRadius: 12,
+                  padding: "10px 12px", color: "#fff", fontSize: 14,
+                  fontFamily: "'DM Sans', sans-serif", outline: "none",
+                }}
+              />
+              <input
+                placeholder="Country"
+                value={locationCountry}
+                onChange={(e) => setLocationCountry(e.target.value)}
+                style={{
+                  width: "100%", background: "rgba(255,255,255,0.08)",
+                  border: "1px solid rgba(255,255,255,0.12)", borderRadius: 12,
+                  padding: "10px 12px", color: "#fff", fontSize: 14,
+                  fontFamily: "'DM Sans', sans-serif", outline: "none",
+                }}
+              />
+            </div>
+          )}
+
+          {sourceMode === "manual" && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 10 }}>
+              <input
+                placeholder="Start date (YYYY-MM-DD)"
+                value={manualStart}
+                onChange={(e) => setManualStart(e.target.value)}
+                style={{
+                  width: "100%", background: "rgba(255,255,255,0.08)",
+                  border: "1px solid rgba(255,255,255,0.12)", borderRadius: 12,
+                  padding: "10px 12px", color: "#fff", fontSize: 14,
+                  fontFamily: "'DM Sans', sans-serif", outline: "none",
+                }}
+              />
+              <input
+                placeholder="End date (YYYY-MM-DD)"
+                value={manualEnd}
+                onChange={(e) => setManualEnd(e.target.value)}
+                style={{
+                  width: "100%", background: "rgba(255,255,255,0.08)",
+                  border: "1px solid rgba(255,255,255,0.12)", borderRadius: 12,
+                  padding: "10px 12px", color: "#fff", fontSize: 14,
+                  fontFamily: "'DM Sans', sans-serif", outline: "none",
+                }}
+              />
+            </div>
+          )}
+
+          {ramadanTools.ramadanError && (
+            <div style={{
+              fontSize: 12, color: "#fca5a5", marginBottom: 10,
+              fontFamily: "'DM Sans', sans-serif",
+            }}>{ramadanTools.ramadanError}</div>
+          )}
+          {ramadanMessage && (
+            <div style={{
+              fontSize: 12, color: "#86efac", marginBottom: 10,
+              fontFamily: "'DM Sans', sans-serif",
+            }}>{ramadanMessage}</div>
+          )}
+
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={handleSaveRamadanMode} style={{
+              flex: 1, padding: "10px 12px",
+              background: "linear-gradient(135deg, #22c55e, #16a34a)",
+              border: "none", borderRadius: 12, color: "#fff", fontSize: 14, fontWeight: 700,
+              cursor: "pointer", fontFamily: "'DM Sans', sans-serif",
+            }}>Save Source</button>
+            {(sourceMode === "global" || sourceMode === "location") && (
+              <button onClick={ramadanTools.retryRamadanResolve} style={{
+                flex: 1, padding: "10px 12px",
+                background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.12)",
+                borderRadius: 12, color: "rgba(255,255,255,0.8)", fontSize: 14, fontWeight: 600,
+                cursor: "pointer", fontFamily: "'DM Sans', sans-serif",
+              }}>Retry API</button>
+            )}
+          </div>
+        </div>
+
         <div style={{ marginBottom: 24 }}>
           <div style={{
             fontSize: 12, fontWeight: 600, color: "rgba(255,255,255,0.4)",
@@ -615,7 +677,6 @@ function SettingsModal({ data, save, onClose, onReset }) {
           )}
         </div>
 
-        {/* About */}
         <div style={{
           borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: 16,
         }}>
@@ -640,8 +701,8 @@ function SettingsModal({ data, save, onClose, onReset }) {
 }
 
 // ─── Day Detail Modal ──────────────────────────────
-function DayDetailModal({ date, goals, checkins, onSave, onClose }) {
-  const ramDay = getRamadanDay(date);
+function DayDetailModal({ date, goals, checkins, onSave, onClose, ramadanWindow }) {
+  const ramDay = getRamadanDay(date, ramadanWindow);
   const dayCheckins = checkins[date] || {};
   const completedCount = goals.filter(g => (dayCheckins[g.id] || 0) >= g.target).length;
 
@@ -753,11 +814,100 @@ function DayDetailModal({ date, goals, checkins, onSave, onClose }) {
   );
 }
 
+function RamadanManualFallbackModal({ error, onSaveManual }) {
+  const [start, setStart] = useState("");
+  const [end, setEnd] = useState("");
+  const [localError, setLocalError] = useState("");
+
+  const handleSubmit = () => {
+    setLocalError("");
+    const result = onSaveManual(start.trim(), end.trim());
+    if (!result.ok) {
+      setLocalError(result.error || "Enter valid Ramadan dates.");
+    }
+  };
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0, zIndex: 200,
+      background: "rgba(0,0,0,0.72)", backdropFilter: "blur(8px)",
+      display: "flex", alignItems: "center", justifyContent: "center",
+      animation: "fadeIn 0.2s",
+    }}>
+      <div style={{
+        width: "90%", maxWidth: 380,
+        background: "linear-gradient(180deg, #1e293b, #0f172a)",
+        borderRadius: 18, padding: 20,
+        border: "1px solid rgba(239,68,68,0.25)",
+      }}>
+        <h3 style={{
+          fontSize: 18, margin: 0, marginBottom: 8, color: "#fff",
+          fontFamily: "'Playfair Display', serif",
+        }}>Set Ramadan Dates Manually</h3>
+        <p style={{
+          margin: 0, marginBottom: 12, fontSize: 13, lineHeight: 1.5,
+          color: "rgba(255,255,255,0.7)", fontFamily: "'DM Sans', sans-serif",
+        }}>
+          We could not resolve dates from the API. Enter start and end dates to continue.
+        </p>
+        {error && (
+          <div style={{
+            fontSize: 12, color: "#fca5a5", marginBottom: 10,
+            fontFamily: "'DM Sans', sans-serif",
+          }}>{error}</div>
+        )}
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 10 }}>
+          <input
+            placeholder="Start date (YYYY-MM-DD)"
+            value={start}
+            onChange={(e) => setStart(e.target.value)}
+            style={{
+              width: "100%", background: "rgba(255,255,255,0.08)",
+              border: "1px solid rgba(255,255,255,0.12)", borderRadius: 12,
+              padding: "10px 12px", color: "#fff", fontSize: 14,
+              fontFamily: "'DM Sans', sans-serif", outline: "none",
+            }}
+          />
+          <input
+            placeholder="End date (YYYY-MM-DD)"
+            value={end}
+            onChange={(e) => setEnd(e.target.value)}
+            style={{
+              width: "100%", background: "rgba(255,255,255,0.08)",
+              border: "1px solid rgba(255,255,255,0.12)", borderRadius: 12,
+              padding: "10px 12px", color: "#fff", fontSize: 14,
+              fontFamily: "'DM Sans', sans-serif", outline: "none",
+            }}
+          />
+        </div>
+        {localError && (
+          <div style={{
+            fontSize: 12, color: "#fca5a5", marginBottom: 10,
+            fontFamily: "'DM Sans', sans-serif",
+          }}>{localError}</div>
+        )}
+        <button onClick={handleSubmit} style={{
+          width: "100%", padding: "12px",
+          background: "linear-gradient(135deg, #22c55e, #16a34a)",
+          border: "none", borderRadius: 12, color: "#fff", fontSize: 14,
+          fontWeight: 700, cursor: "pointer", fontFamily: "'DM Sans', sans-serif",
+        }}>Save and Continue</button>
+      </div>
+    </div>
+  );
+}
+
 // ─── Onboarding ─────────────────────────────────────
-function Onboarding({ onComplete }) {
+function Onboarding({ onComplete, seasonYear }) {
   const [step, setStep] = useState(0);
   const [name, setName] = useState("");
   const [selected, setSelected] = useState(new Set([0, 1, 2]));
+  const [sourceMode, setSourceMode] = useState("global");
+  const [locationCity, setLocationCity] = useState(RAMADAN_DEFAULT_CITY);
+  const [locationCountry, setLocationCountry] = useState(RAMADAN_DEFAULT_COUNTRY);
+  const [manualStart, setManualStart] = useState("");
+  const [manualEnd, setManualEnd] = useState("");
+  const [sourceError, setSourceError] = useState("");
 
   const toggle = i => {
     setSelected(prev => {
@@ -765,6 +915,26 @@ function Onboarding({ onComplete }) {
       next.has(i) ? next.delete(i) : next.add(i);
       return next;
     });
+  };
+
+  const canContinueDateStep = sourceMode === "global"
+    || (sourceMode === "location" && locationCity.trim() && locationCountry.trim())
+    || sourceMode === "manual";
+
+  const handleDateStepContinue = () => {
+    setSourceError("");
+    if (sourceMode === "manual") {
+      const validation = validateRamadanWindow(manualStart, manualEnd);
+      if (!validation.ok) {
+        setSourceError(validation.error);
+        return;
+      }
+    }
+    if (sourceMode === "location" && (!locationCity.trim() || !locationCountry.trim())) {
+      setSourceError("City and country are required for location mode.");
+      return;
+    }
+    setStep(2);
   };
 
   return (
@@ -813,7 +983,139 @@ function Onboarding({ onComplete }) {
           >Continue</button>
         </div>
       )}
+
       {step === 1 && (
+        <div style={{ animation: "fadeIn 0.4s ease-out", width: "100%", maxWidth: 420 }}>
+          <h2 style={{
+            fontSize: 24, fontWeight: 700, color: "#fff", textAlign: "center",
+            fontFamily: "'Playfair Display', serif", marginBottom: 6,
+          }}>Choose Date Source</h2>
+          <p style={{
+            color: "rgba(255,255,255,0.45)", fontSize: 14, textAlign: "center",
+            fontFamily: "'DM Sans', sans-serif", marginBottom: 20,
+          }}>You can change this anytime in Settings.</p>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 16 }}>
+            <button onClick={() => setSourceMode("global")} style={{
+              display: "flex", justifyContent: "space-between", alignItems: "center",
+              background: sourceMode === "global" ? "rgba(34,197,94,0.12)" : "rgba(255,255,255,0.04)",
+              border: sourceMode === "global" ? "1px solid rgba(34,197,94,0.35)" : "1px solid rgba(255,255,255,0.08)",
+              borderRadius: 14, padding: "14px 16px", color: "#fff", cursor: "pointer",
+              fontFamily: "'DM Sans', sans-serif",
+            }}>
+              <span>Global API</span>
+              <span>{sourceMode === "global" ? "✓" : ""}</span>
+            </button>
+            <button onClick={() => setSourceMode("location")} style={{
+              display: "flex", justifyContent: "space-between", alignItems: "center",
+              background: sourceMode === "location" ? "rgba(34,197,94,0.12)" : "rgba(255,255,255,0.04)",
+              border: sourceMode === "location" ? "1px solid rgba(34,197,94,0.35)" : "1px solid rgba(255,255,255,0.08)",
+              borderRadius: 14, padding: "14px 16px", color: "#fff", cursor: "pointer",
+              fontFamily: "'DM Sans', sans-serif",
+            }}>
+              <span>Location-Based API</span>
+              <span>{sourceMode === "location" ? "✓" : ""}</span>
+            </button>
+            <button onClick={() => setSourceMode("manual")} style={{
+              display: "flex", justifyContent: "space-between", alignItems: "center",
+              background: sourceMode === "manual" ? "rgba(34,197,94,0.12)" : "rgba(255,255,255,0.04)",
+              border: sourceMode === "manual" ? "1px solid rgba(34,197,94,0.35)" : "1px solid rgba(255,255,255,0.08)",
+              borderRadius: 14, padding: "14px 16px", color: "#fff", cursor: "pointer",
+              fontFamily: "'DM Sans', sans-serif",
+            }}>
+              <span>Manual Dates</span>
+              <span>{sourceMode === "manual" ? "✓" : ""}</span>
+            </button>
+          </div>
+
+          {sourceMode === "location" && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 16 }}>
+              <input
+                placeholder="City"
+                value={locationCity}
+                onChange={(e) => setLocationCity(e.target.value)}
+                style={{
+                  width: "100%", background: "rgba(255,255,255,0.08)",
+                  border: "1px solid rgba(255,255,255,0.12)", borderRadius: 12,
+                  padding: "12px 14px", color: "#fff", fontSize: 14,
+                  fontFamily: "'DM Sans', sans-serif", outline: "none", boxSizing: "border-box",
+                }}
+              />
+              <input
+                placeholder="Country"
+                value={locationCountry}
+                onChange={(e) => setLocationCountry(e.target.value)}
+                style={{
+                  width: "100%", background: "rgba(255,255,255,0.08)",
+                  border: "1px solid rgba(255,255,255,0.12)", borderRadius: 12,
+                  padding: "12px 14px", color: "#fff", fontSize: 14,
+                  fontFamily: "'DM Sans', sans-serif", outline: "none", boxSizing: "border-box",
+                }}
+              />
+            </div>
+          )}
+
+          {sourceMode === "manual" && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 16 }}>
+              <input
+                placeholder="Start date (YYYY-MM-DD)"
+                value={manualStart}
+                onChange={(e) => setManualStart(e.target.value)}
+                style={{
+                  width: "100%", background: "rgba(255,255,255,0.08)",
+                  border: "1px solid rgba(255,255,255,0.12)", borderRadius: 12,
+                  padding: "12px 14px", color: "#fff", fontSize: 14,
+                  fontFamily: "'DM Sans', sans-serif", outline: "none", boxSizing: "border-box",
+                }}
+              />
+              <input
+                placeholder="End date (YYYY-MM-DD)"
+                value={manualEnd}
+                onChange={(e) => setManualEnd(e.target.value)}
+                style={{
+                  width: "100%", background: "rgba(255,255,255,0.08)",
+                  border: "1px solid rgba(255,255,255,0.12)", borderRadius: 12,
+                  padding: "12px 14px", color: "#fff", fontSize: 14,
+                  fontFamily: "'DM Sans', sans-serif", outline: "none", boxSizing: "border-box",
+                }}
+              />
+            </div>
+          )}
+
+          {sourceError && (
+            <div style={{
+              color: "#fca5a5",
+              fontSize: 13,
+              marginBottom: 12,
+              fontFamily: "'DM Sans', sans-serif",
+            }}>{sourceError}</div>
+          )}
+
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={() => setStep(0)} style={{
+              flex: 1, padding: "12px",
+              background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.12)",
+              borderRadius: 12, color: "rgba(255,255,255,0.7)", fontSize: 14, cursor: "pointer",
+              fontFamily: "'DM Sans', sans-serif",
+            }}>Back</button>
+            <button
+              disabled={!canContinueDateStep}
+              onClick={handleDateStepContinue}
+              style={{
+                flex: 1, padding: "12px",
+                background: canContinueDateStep
+                  ? "linear-gradient(135deg, #22c55e, #059669)"
+                  : "rgba(255,255,255,0.08)",
+                border: "none", borderRadius: 12, color: "#fff", fontSize: 14,
+                fontWeight: 700, cursor: canContinueDateStep ? "pointer" : "default",
+                fontFamily: "'DM Sans', sans-serif", opacity: canContinueDateStep ? 1 : 0.4,
+              }}
+            >Continue</button>
+          </div>
+        </div>
+      )}
+
+      {step === 2 && (
         <div style={{ animation: "fadeIn 0.4s ease-out", width: "100%", maxWidth: 400 }}>
           <h2 style={{
             fontSize: 24, fontWeight: 700, color: "#fff", textAlign: "center",
@@ -843,21 +1145,36 @@ function Onboarding({ onComplete }) {
               </button>
             ))}
           </div>
-          <button
-            disabled={selected.size === 0}
-            onClick={() => {
-              const goals = [...selected].map(i => ({ ...TEMPLATES[i], id: generateId() }));
-              onComplete(name.trim(), goals);
-            }}
-            style={{
-              width: "100%", padding: "16px",
-              background: selected.size > 0 ? "linear-gradient(135deg, #22c55e, #059669)" : "rgba(255,255,255,0.08)",
-              border: "none", borderRadius: 16, color: "#fff", fontSize: 17,
-              fontWeight: 700, cursor: selected.size > 0 ? "pointer" : "default",
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={() => setStep(1)} style={{
+              flex: 1, padding: "12px",
+              background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.12)",
+              borderRadius: 12, color: "rgba(255,255,255,0.7)", fontSize: 14, cursor: "pointer",
               fontFamily: "'DM Sans', sans-serif",
-              opacity: selected.size > 0 ? 1 : 0.4,
-            }}
-          >Start Ramadan {CURRENT_YEAR}</button>
+            }}>Back</button>
+            <button
+              disabled={selected.size === 0}
+              onClick={() => {
+                const goals = [...selected].map(i => ({ ...TEMPLATES[i], id: generateId() }));
+                onComplete(name.trim(), goals, {
+                  sourceMode,
+                  locationCity: sourceMode === "location" ? locationCity.trim() : RAMADAN_DEFAULT_CITY,
+                  locationCountry: sourceMode === "location" ? locationCountry.trim() : RAMADAN_DEFAULT_COUNTRY,
+                  manualStart: sourceMode === "manual" ? manualStart.trim() : "",
+                  manualEnd: sourceMode === "manual" ? manualEnd.trim() : "",
+                  setupComplete: true,
+                });
+              }}
+              style={{
+                flex: 1, padding: "12px",
+                background: selected.size > 0 ? "linear-gradient(135deg, #22c55e, #059669)" : "rgba(255,255,255,0.08)",
+                border: "none", borderRadius: 12, color: "#fff", fontSize: 14,
+                fontWeight: 700, cursor: selected.size > 0 ? "pointer" : "default",
+                fontFamily: "'DM Sans', sans-serif",
+                opacity: selected.size > 0 ? 1 : 0.4,
+              }}
+            >Start Ramadan {seasonYear || CURRENT_YEAR}</button>
+          </div>
         </div>
       )}
     </div>
@@ -865,12 +1182,12 @@ function Onboarding({ onComplete }) {
 }
 
 // ─── Today Screen ───────────────────────────────────
-function TodayScreen({ data, save, onReset }) {
+function TodayScreen({ data, save, onReset, ramadanWindow, ramadanTools }) {
   const [showAdd, setShowAdd] = useState(false);
   const [editIdx, setEditIdx] = useState(null);
   const [showSettings, setShowSettings] = useState(false);
   const today = todayStr();
-  const ramDay = getRamadanDay(today);
+  const ramDay = getRamadanDay(today, ramadanWindow);
   const dayCheckins = data.checkins[today] || {};
 
   const handleTap = (goal) => {
@@ -913,7 +1230,7 @@ function TodayScreen({ data, save, onReset }) {
             fontSize: 13, color: "rgba(255,255,255,0.4)", fontFamily: "'DM Sans', sans-serif",
             fontWeight: 500,
           }}>
-            {ramDay ? `Ramadan Day ${ramDay}` : `Ramadan ${CURRENT_YEAR}`}
+            {ramDay ? `Ramadan Day ${ramDay}` : `Ramadan ${ramadanWindow.seasonYear}`}
           </div>
           <button onClick={() => setShowSettings(true)} style={{
             background: "none", border: "none", cursor: "pointer",
@@ -983,6 +1300,8 @@ function TodayScreen({ data, save, onReset }) {
         <SettingsModal
           data={data}
           save={save}
+          ramadanWindow={ramadanWindow}
+          ramadanTools={ramadanTools}
           onClose={() => setShowSettings(false)}
           onReset={onReset}
         />
@@ -992,10 +1311,15 @@ function TodayScreen({ data, save, onReset }) {
 }
 
 // ─── Progress Screen ────────────────────────────────
-function ProgressScreen({ data, save }) {
+function ProgressScreen({ data, save, ramadanWindow }) {
   const [selectedDay, setSelectedDay] = useState(null);
   const today = todayStr();
-  const days = getDaysInRange(RAMADAN_START, today < RAMADAN_START ? RAMADAN_START : today > RAMADAN_END ? RAMADAN_END : today);
+  const boundedToday = today < ramadanWindow.start
+    ? ramadanWindow.start
+    : today > ramadanWindow.end
+      ? ramadanWindow.end
+      : today;
+  const days = getDaysInRange(ramadanWindow.start, boundedToday);
 
   const goalStats = data.goals.map((goal) => {
     let completed = 0, total = 0, bestStreak = 0, currentStreak = 0;
@@ -1026,7 +1350,7 @@ function ProgressScreen({ data, save }) {
         <p style={{
           color: "rgba(255,255,255,0.4)", fontSize: 14, margin: 0,
           fontFamily: "'DM Sans', sans-serif",
-        }}>Ramadan {CURRENT_YEAR}</p>
+        }}>Ramadan {ramadanWindow.seasonYear}</p>
       </div>
 
       {/* Overall Score */}
@@ -1051,7 +1375,12 @@ function ProgressScreen({ data, save }) {
           fontSize: 16, fontWeight: 600, color: "rgba(255,255,255,0.7)",
           fontFamily: "'DM Sans', sans-serif", marginBottom: 12,
         }}>Daily consistency</h3>
-        <Heatmap checkins={data.checkins} goals={data.goals} onDayTap={setSelectedDay} />
+        <Heatmap
+          checkins={data.checkins}
+          goals={data.goals}
+          onDayTap={setSelectedDay}
+          ramadanWindow={ramadanWindow}
+        />
       </div>
 
       {/* Per-Goal Stats */}
@@ -1073,7 +1402,12 @@ function ProgressScreen({ data, save }) {
                   fontFamily: "'DM Sans', sans-serif",
                 }}>{gs.goal.title}</span>
               </div>
-              <StreakBadge checkins={data.checkins} goalId={gs.goal.id} goal={gs.goal} />
+              <StreakBadge
+                checkins={data.checkins}
+                goalId={gs.goal.id}
+                goal={gs.goal}
+                ramadanWindow={ramadanWindow}
+              />
             </div>
             <div style={{
               height: 6, borderRadius: 3, background: "rgba(255,255,255,0.08)",
@@ -1114,6 +1448,7 @@ function ProgressScreen({ data, save }) {
           date={selectedDay}
           goals={data.goals}
           checkins={data.checkins}
+          ramadanWindow={ramadanWindow}
           onSave={(date, goalId, val) => {
             const dayCheckins = data.checkins[date] || {};
             const newCheckins = { ...data.checkins, [date]: { ...dayCheckins, [goalId]: val } };
@@ -1127,21 +1462,32 @@ function ProgressScreen({ data, save }) {
 }
 
 // ─── Circle Screen ──────────────────────────────────
-function CircleScreen({ data, save }) {
+function CircleScreen({ data, social }) {
   const [showCreate, setShowCreate] = useState(false);
   const [groupName, setGroupName] = useState("");
   const [joinCode, setJoinCode] = useState("");
+  const [email, setEmail] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [localError, setLocalError] = useState("");
 
-  const sampleLeaderboard = [
-    { name: data.userName || "You", pct: 78, isYou: true },
-    { name: "Amina", pct: 92, isYou: false },
-    { name: "Yusuf", pct: 85, isYou: false },
-    { name: "Fatima", pct: 71, isYou: false },
-  ].sort((a, b) => b.pct - a.pct);
+  const runAction = async (fn) => {
+    setBusy(true);
+    setLocalError("");
+    try {
+      await fn();
+    } catch (error) {
+      console.error(error);
+      setLocalError(error.message || "Action failed.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const activeCircle = social.circles.find((circle) => circle.id === social.activeCircleId) || null;
 
   return (
     <div style={{ padding: "0 16px 100px" }}>
-      <div style={{ paddingTop: 20, marginBottom: 24 }}>
+      <div style={{ paddingTop: 20, marginBottom: 20 }}>
         <h1 style={{
           fontSize: 28, fontWeight: 700, color: "#fff",
           fontFamily: "'Playfair Display', serif", margin: 0, marginBottom: 4,
@@ -1152,132 +1498,388 @@ function CircleScreen({ data, save }) {
         }}>Journey together</p>
       </div>
 
-      {/* Feature Preview Card */}
-      <div style={{
-        background: "linear-gradient(135deg, rgba(139,92,246,0.12), rgba(59,130,246,0.08))",
-        borderRadius: 20, padding: 24, marginBottom: 20,
-        border: "1px solid rgba(139,92,246,0.2)",
-      }}>
-        <div style={{ fontSize: 32, marginBottom: 12 }}>👥</div>
-        <h3 style={{
-          fontSize: 18, fontWeight: 700, color: "#fff",
-          fontFamily: "'Playfair Display', serif", marginBottom: 8,
-        }}>Friendly Accountability</h3>
-        <p style={{
-          fontSize: 14, color: "rgba(255,255,255,0.5)", margin: 0, lineHeight: 1.5,
-          fontFamily: "'DM Sans', sans-serif", marginBottom: 16,
+      {!social.backendReady && (
+        <div style={{
+          background: "rgba(245,158,11,0.12)",
+          border: "1px solid rgba(245,158,11,0.35)",
+          borderRadius: 18,
+          padding: 18,
+          marginBottom: 18,
+          fontFamily: "'DM Sans', sans-serif",
         }}>
-          Create a small group with friends. See each other's completion rates and encourage one another.
-          All data shared is aggregate — daily details stay private.
-        </p>
-        <div style={{ display: "flex", gap: 10 }}>
-          <button onClick={() => setShowCreate(true)} style={{
-            flex: 1, padding: "12px", background: "rgba(139,92,246,0.25)",
-            border: "1px solid rgba(139,92,246,0.4)", borderRadius: 12,
-            color: "#c4b5fd", fontSize: 14, fontWeight: 600, cursor: "pointer",
-            fontFamily: "'DM Sans', sans-serif",
-          }}>Create Group</button>
-          <button style={{
-            flex: 1, padding: "12px", background: "rgba(255,255,255,0.06)",
-            border: "1px solid rgba(255,255,255,0.1)", borderRadius: 12,
-            color: "rgba(255,255,255,0.6)", fontSize: 14, fontWeight: 600, cursor: "pointer",
-            fontFamily: "'DM Sans', sans-serif",
-          }}>Join Group</button>
+          <div style={{ fontWeight: 700, color: "#fcd34d", marginBottom: 8 }}>Backend Not Configured</div>
+          <div style={{ color: "rgba(255,255,255,0.7)", fontSize: 13, lineHeight: 1.6 }}>
+            Add `SUPABASE_URL` and `SUPABASE_ANON_KEY` to `window.__APP_CONFIG__` in `index.html`
+            to enable private circles, sharing, and reactions.
+          </div>
         </div>
-      </div>
+      )}
 
-      {/* Sample Leaderboard Preview */}
-      <div style={{
-        background: "rgba(255,255,255,0.03)", borderRadius: 20,
-        padding: 20, border: "1px solid rgba(255,255,255,0.06)",
-      }}>
-        <h3 style={{
-          fontSize: 16, fontWeight: 600, color: "rgba(255,255,255,0.7)",
-          fontFamily: "'DM Sans', sans-serif", marginBottom: 16,
-        }}>Preview: Group Leaderboard</h3>
-        {sampleLeaderboard.map((person, i) => (
-          <div key={i} style={{
-            display: "flex", alignItems: "center", gap: 12,
-            padding: "10px 0",
-            borderBottom: i < sampleLeaderboard.length - 1 ? "1px solid rgba(255,255,255,0.05)" : "none",
+      {social.backendReady && !social.session && (
+        <div style={{
+          background: "linear-gradient(135deg, rgba(59,130,246,0.14), rgba(14,165,233,0.08))",
+          border: "1px solid rgba(56,189,248,0.35)",
+          borderRadius: 18,
+          padding: 18,
+          marginBottom: 18,
+        }}>
+          <div style={{
+            fontSize: 16, fontWeight: 700, color: "#e0f2fe", marginBottom: 10,
+            fontFamily: "'DM Sans', sans-serif",
+          }}>Sign In to Share</div>
+          <div style={{
+            fontSize: 13, color: "rgba(255,255,255,0.7)", marginBottom: 12, lineHeight: 1.5,
+            fontFamily: "'DM Sans', sans-serif",
           }}>
-            <span style={{
-              width: 28, height: 28, borderRadius: 14,
-              background: i === 0 ? "linear-gradient(135deg, #f59e0b, #d97706)" :
-                i === 1 ? "rgba(148,163,184,0.3)" :
-                i === 2 ? "rgba(180,130,80,0.3)" : "rgba(255,255,255,0.08)",
-              display: "flex", alignItems: "center", justifyContent: "center",
-              fontSize: 13, fontWeight: 700, color: "#fff",
-              fontFamily: "'DM Sans', sans-serif",
-            }}>{i + 1}</span>
-            <span style={{
-              flex: 1, fontSize: 15, fontWeight: person.isYou ? 700 : 500,
-              color: person.isYou ? "#fff" : "rgba(255,255,255,0.6)",
-              fontFamily: "'DM Sans', sans-serif",
-            }}>
-              {person.name} {person.isYou && <span style={{ color: "rgba(255,255,255,0.3)", fontWeight: 400 }}>(you)</span>}
-            </span>
+            Use magic-link email sign-in to create private circles and share progress with friends.
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <input
+              placeholder="you@example.com"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              style={{
+                flex: 1, background: "rgba(255,255,255,0.08)",
+                border: "1px solid rgba(255,255,255,0.14)", borderRadius: 12,
+                padding: "10px 12px", color: "#fff", fontSize: 14,
+                fontFamily: "'DM Sans', sans-serif", outline: "none",
+              }}
+            />
+            <button
+              disabled={busy || !email.trim()}
+              onClick={() =>
+                runAction(async () => {
+                  await social.authSignInWithMagicLink(email);
+                  setEmail("");
+                })}
+              style={{
+                padding: "10px 14px", borderRadius: 12, border: "none",
+                background: busy || !email.trim()
+                  ? "rgba(255,255,255,0.14)"
+                  : "linear-gradient(135deg, #22c55e, #16a34a)",
+                color: "#fff", fontWeight: 700, cursor: busy || !email.trim() ? "default" : "pointer",
+                fontFamily: "'DM Sans', sans-serif", opacity: busy || !email.trim() ? 0.5 : 1,
+              }}
+            >Send Link</button>
+          </div>
+        </div>
+      )}
+
+      {social.backendReady && social.session && (
+        <>
+          <div style={{
+            background: "rgba(255,255,255,0.03)",
+            border: "1px solid rgba(255,255,255,0.08)",
+            borderRadius: 18,
+            padding: 16,
+            marginBottom: 18,
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: 12,
+          }}>
+            <div>
+              <div style={{
+                fontSize: 12, color: "rgba(255,255,255,0.45)",
+                fontFamily: "'DM Sans', sans-serif",
+              }}>Signed in as</div>
+              <div style={{
+                fontSize: 14, color: "#fff", fontWeight: 600,
+                fontFamily: "'DM Sans', sans-serif",
+              }}>{social.session.user.email}</div>
+            </div>
+            <button
+              onClick={() => runAction(() => social.authSignOut())}
+              style={{
+                padding: "9px 12px",
+                background: "rgba(239,68,68,0.16)",
+                border: "1px solid rgba(239,68,68,0.35)",
+                borderRadius: 12,
+                color: "#fca5a5",
+                fontWeight: 700,
+                fontSize: 13,
+                cursor: "pointer",
+                fontFamily: "'DM Sans', sans-serif",
+              }}
+            >Sign Out</button>
+          </div>
+
+          <div style={{
+            background: "linear-gradient(135deg, rgba(139,92,246,0.12), rgba(59,130,246,0.08))",
+            borderRadius: 20, padding: 20, marginBottom: 18,
+            border: "1px solid rgba(139,92,246,0.2)",
+          }}>
             <div style={{
-              width: 80, height: 6, borderRadius: 3, background: "rgba(255,255,255,0.08)",
-              overflow: "hidden",
+              fontSize: 18, fontWeight: 700, color: "#fff",
+              fontFamily: "'Playfair Display', serif", marginBottom: 8,
+            }}>Private Invite-Only Circles</div>
+            <p style={{
+              fontSize: 13, color: "rgba(255,255,255,0.6)", margin: 0, lineHeight: 1.5,
+              fontFamily: "'DM Sans', sans-serif", marginBottom: 14,
+            }}>
+              Share goal progress snapshots and send emoji encouragement. Group size is limited to 12 members.
+            </p>
+            <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+              <button
+                onClick={() => setShowCreate(true)}
+                style={{
+                  flex: 1, padding: "11px 12px", background: "rgba(139,92,246,0.24)",
+                  border: "1px solid rgba(139,92,246,0.4)", borderRadius: 12,
+                  color: "#ddd6fe", fontSize: 13, fontWeight: 700, cursor: "pointer",
+                  fontFamily: "'DM Sans', sans-serif",
+                }}
+              >Create Circle</button>
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <input
+                placeholder="Invite code"
+                value={joinCode}
+                onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
+                style={{
+                  flex: 1, background: "rgba(255,255,255,0.08)",
+                  border: "1px solid rgba(255,255,255,0.12)", borderRadius: 12,
+                  padding: "10px 12px", color: "#fff", fontSize: 14,
+                  fontFamily: "'DM Sans', sans-serif", outline: "none",
+                }}
+              />
+              <button
+                disabled={!joinCode.trim() || busy}
+                onClick={() =>
+                  runAction(async () => {
+                    await social.joinCircleByInvite(joinCode);
+                    setJoinCode("");
+                    await social.refreshFeed();
+                  })}
+                style={{
+                  padding: "10px 14px",
+                  background: !joinCode.trim() || busy
+                    ? "rgba(255,255,255,0.12)"
+                    : "linear-gradient(135deg, #3b82f6, #2563eb)",
+                  border: "none",
+                  borderRadius: 12,
+                  color: "#fff",
+                  fontWeight: 700,
+                  cursor: !joinCode.trim() || busy ? "default" : "pointer",
+                  fontFamily: "'DM Sans', sans-serif",
+                  opacity: !joinCode.trim() || busy ? 0.5 : 1,
+                }}
+              >Join</button>
+            </div>
+          </div>
+
+          <div style={{
+            marginBottom: 18,
+            background: "rgba(255,255,255,0.03)",
+            border: "1px solid rgba(255,255,255,0.08)",
+            borderRadius: 18,
+            padding: 14,
+          }}>
+            <div style={{
+              fontSize: 13, color: "rgba(255,255,255,0.6)", marginBottom: 10,
+              fontFamily: "'DM Sans', sans-serif", fontWeight: 600,
+            }}>Your Circles</div>
+            {social.circles.length === 0 ? (
+              <div style={{
+                fontSize: 13, color: "rgba(255,255,255,0.35)",
+                fontFamily: "'DM Sans', sans-serif",
+              }}>No circles yet. Create one or join by invite code.</div>
+            ) : (
+              <div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 2 }}>
+                {social.circles.map((circle) => (
+                  <button
+                    key={circle.id}
+                    onClick={() => social.setActiveCircle(circle.id)}
+                    style={{
+                      minWidth: 170,
+                      textAlign: "left",
+                      padding: "10px 12px",
+                      borderRadius: 12,
+                      border: social.activeCircleId === circle.id
+                        ? "1px solid rgba(34,197,94,0.45)"
+                        : "1px solid rgba(255,255,255,0.12)",
+                      background: social.activeCircleId === circle.id
+                        ? "rgba(34,197,94,0.16)"
+                        : "rgba(255,255,255,0.05)",
+                      color: "#fff",
+                      cursor: "pointer",
+                      fontFamily: "'DM Sans', sans-serif",
+                    }}
+                  >
+                    <div style={{
+                      fontSize: 14, fontWeight: 700, fontFamily: "'DM Sans', sans-serif",
+                      marginBottom: 2,
+                    }}>{circle.name}</div>
+                    <div style={{
+                      fontSize: 11, color: "rgba(255,255,255,0.5)",
+                      fontFamily: "'DM Sans', sans-serif",
+                    }}>Invite: {circle.invite_code}</div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div style={{
+            background: "rgba(255,255,255,0.03)",
+            border: "1px solid rgba(255,255,255,0.08)",
+            borderRadius: 20,
+            padding: 16,
+            marginBottom: 12,
+          }}>
+            <div style={{
+              display: "flex", alignItems: "baseline", justifyContent: "space-between",
+              marginBottom: 12,
             }}>
               <div style={{
-                height: "100%", borderRadius: 3,
-                background: person.isYou ? "linear-gradient(90deg, #22c55e, #86efac)" : "linear-gradient(90deg, #3b82f6, #60a5fa)",
-                width: `${person.pct}%`,
-                transition: "width 0.6s",
-              }} />
+                fontSize: 16, color: "#fff", fontWeight: 700,
+                fontFamily: "'DM Sans', sans-serif",
+              }}>
+                {activeCircle ? `${activeCircle.name} Feed` : "Circle Feed"}
+              </div>
+              <div style={{
+                fontSize: 12, color: "rgba(255,255,255,0.4)",
+                fontFamily: "'DM Sans', sans-serif",
+              }}>{social.syncing ? "Syncing..." : "Live snapshots"}</div>
             </div>
-            <span style={{
-              fontSize: 14, fontWeight: 700, color: person.isYou ? "#22c55e" : "rgba(255,255,255,0.5)",
-              fontFamily: "'DM Sans', sans-serif", minWidth: 38, textAlign: "right",
-            }}>{person.pct}%</span>
+
+            {social.loading && (
+              <div style={{
+                padding: "10px 0", color: "rgba(255,255,255,0.5)", fontSize: 13,
+                fontFamily: "'DM Sans', sans-serif",
+              }}>Loading feed...</div>
+            )}
+
+            {!social.loading && social.feed.length === 0 && (
+              <div style={{
+                padding: "10px 0", color: "rgba(255,255,255,0.4)", fontSize: 13,
+                fontFamily: "'DM Sans', sans-serif", lineHeight: 1.6,
+              }}>
+                {activeCircle
+                  ? "No updates yet. Check in on your goals to publish the first snapshot."
+                  : "Select a circle to view shared updates."}
+              </div>
+            )}
+
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              {social.feed.map((update) => (
+                <div
+                  key={update.updateId}
+                  style={{
+                    borderRadius: 14,
+                    background: "rgba(255,255,255,0.04)",
+                    border: "1px solid rgba(255,255,255,0.08)",
+                    padding: 12,
+                  }}
+                >
+                  <div style={{
+                    display: "flex", alignItems: "center", justifyContent: "space-between",
+                    marginBottom: 8,
+                  }}>
+                    <div style={{
+                      fontSize: 14, fontWeight: 700, color: "#fff",
+                      fontFamily: "'DM Sans', sans-serif",
+                    }}>{update.authorDisplayName}</div>
+                    <div style={{
+                      fontSize: 11, color: "rgba(255,255,255,0.4)",
+                      fontFamily: "'DM Sans', sans-serif",
+                    }}>{update.snapshotDate}</div>
+                  </div>
+                  <div style={{
+                    fontSize: 13, color: "rgba(255,255,255,0.7)",
+                    fontFamily: "'DM Sans', sans-serif", marginBottom: 8,
+                  }}>
+                    Overall {Math.round(update.overallCompletionPct)}% · Today {update.todayCompletedCount}/{update.todayTotalGoals}
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 8 }}>
+                    {update.goalProgress.slice(0, 6).map((goal) => (
+                      <div key={`${update.updateId}-${goal.goalId}`} style={{
+                        display: "flex", justifyContent: "space-between",
+                        fontSize: 12, color: "rgba(255,255,255,0.6)",
+                        fontFamily: "'DM Sans', sans-serif",
+                      }}>
+                        <span>{goal.title}</span>
+                        <span>{Math.round(goal.completionPctToDate)}% {goal.todayCompleted ? "✓" : ""}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    {update.reactionSummary.map((item) => (
+                      <button
+                        key={`${update.updateId}-${item.emoji}`}
+                        onClick={() => runAction(() => social.toggleReaction(update.updateId, item.emoji))}
+                        style={{
+                          minWidth: 46,
+                          height: 34,
+                          borderRadius: 17,
+                          border: item.reactedByMe
+                            ? "1px solid rgba(34,197,94,0.6)"
+                            : "1px solid rgba(255,255,255,0.14)",
+                          background: item.reactedByMe
+                            ? "rgba(34,197,94,0.24)"
+                            : "rgba(255,255,255,0.06)",
+                          color: "#fff",
+                          fontFamily: "'DM Sans', sans-serif",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          gap: 4,
+                          cursor: "pointer",
+                        }}
+                      >
+                        <span>{item.emoji}</span>
+                        <span style={{ fontSize: 11 }}>{item.count || 0}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
-        ))}
+        </>
+      )}
+
+      {(localError || social.error) && (
         <div style={{
-          marginTop: 16, display: "flex", gap: 8, justifyContent: "center",
+          marginTop: 8, borderRadius: 12, padding: "10px 12px",
+          background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.3)",
+          color: "#fca5a5", fontSize: 13, fontFamily: "'DM Sans', sans-serif",
         }}>
-          {["🤲", "💪", "✨", "🌙"].map((emoji, i) => (
-            <button key={i} style={{
-              width: 44, height: 44, borderRadius: 22,
-              background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)",
-              fontSize: 20, cursor: "pointer", display: "flex",
-              alignItems: "center", justifyContent: "center",
-              transition: "transform 0.15s",
-            }}
-              onPointerDown={e => e.target.style.transform = "scale(0.9)"}
-              onPointerUp={e => e.target.style.transform = "scale(1)"}
-            >{emoji}</button>
-          ))}
+          {localError || social.error}
         </div>
-      </div>
+      )}
 
       {showCreate && (
-        <div style={{
-          position: "fixed", inset: 0, zIndex: 100,
-          background: "rgba(0,0,0,0.6)", backdropFilter: "blur(8px)",
-          display: "flex", alignItems: "center", justifyContent: "center",
-          animation: "fadeIn 0.2s",
-        }} onClick={() => setShowCreate(false)}>
-          <div onClick={e => e.stopPropagation()} style={{
-            background: "linear-gradient(180deg, #1e293b, #0f172a)",
-            borderRadius: 24, padding: "28px 24px", width: "85%", maxWidth: 340,
-            animation: "scaleIn 0.25s cubic-bezier(.4,0,.2,1)",
-          }}>
+        <div
+          style={{
+            position: "fixed", inset: 0, zIndex: 100,
+            background: "rgba(0,0,0,0.6)", backdropFilter: "blur(8px)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            animation: "fadeIn 0.2s",
+          }}
+          onClick={() => setShowCreate(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: "linear-gradient(180deg, #1e293b, #0f172a)",
+              borderRadius: 24, padding: "28px 24px", width: "85%", maxWidth: 340,
+              animation: "scaleIn 0.25s cubic-bezier(.4,0,.2,1)",
+            }}
+          >
             <h3 style={{
               fontSize: 20, fontWeight: 700, color: "#fff",
               fontFamily: "'Playfair Display', serif", marginBottom: 16,
-            }}>Create a Group</h3>
+            }}>Create a Circle</h3>
             <p style={{
-              fontSize: 13, color: "rgba(255,255,255,0.4)", marginBottom: 16,
+              fontSize: 13, color: "rgba(255,255,255,0.45)", marginBottom: 16,
               fontFamily: "'DM Sans', sans-serif", lineHeight: 1.5,
             }}>
-              Groups share completion percentages only. Your daily details stay private.
+              Invite friends with a private code. Shared updates include goals and aggregate progress only.
             </p>
             <input
-              placeholder="Group name"
+              placeholder="Circle name"
               value={groupName}
-              onChange={e => setGroupName(e.target.value)}
+              onChange={(e) => setGroupName(e.target.value)}
               style={{
                 width: "100%", background: "rgba(255,255,255,0.08)",
                 border: "1px solid rgba(255,255,255,0.12)", borderRadius: 12,
@@ -1286,13 +1888,26 @@ function CircleScreen({ data, save }) {
                 marginBottom: 12, boxSizing: "border-box",
               }}
             />
-            <button style={{
-              width: "100%", padding: "14px",
-              background: "linear-gradient(135deg, #8b5cf6, #7c3aed)",
-              border: "none", borderRadius: 14, color: "#fff", fontSize: 16,
-              fontWeight: 700, cursor: "pointer", fontFamily: "'DM Sans', sans-serif",
-              opacity: groupName.trim() ? 1 : 0.4,
-            }}>Create & Get Invite Link</button>
+            <button
+              disabled={!groupName.trim() || busy}
+              onClick={() =>
+                runAction(async () => {
+                  await social.createCircle(groupName);
+                  setGroupName("");
+                  setShowCreate(false);
+                  await social.refreshFeed();
+                })}
+              style={{
+                width: "100%", padding: "14px",
+                background: !groupName.trim() || busy
+                  ? "rgba(255,255,255,0.12)"
+                  : "linear-gradient(135deg, #8b5cf6, #7c3aed)",
+                border: "none", borderRadius: 14, color: "#fff", fontSize: 16,
+                fontWeight: 700, cursor: !groupName.trim() || busy ? "default" : "pointer",
+                fontFamily: "'DM Sans', sans-serif",
+                opacity: !groupName.trim() || busy ? 0.5 : 1,
+              }}
+            >Create Circle</button>
           </div>
         </div>
       )}
@@ -1303,8 +1918,24 @@ function CircleScreen({ data, save }) {
 // ─── Main App ───────────────────────────────────────
 export default function RamadanGoals() {
   const { data, save, loading } = useStorage();
+  const ramadanTools = useRamadanWindow(data, save);
+  const social = useSupabaseSocial(data, save, ramadanTools.ramadanWindow);
   const [tab, setTab] = useState("today");
   const [hasOnboarded, setHasOnboarded] = useState(null);
+
+  const saveWithCloudSync = useCallback((newData, options = {}) => {
+    save(newData);
+    if (
+      !options.skipCloud &&
+      social.backendReady &&
+      social.session?.user &&
+      newData?.cloudAuth?.seededAt
+    ) {
+      social.syncFromLocal(newData).catch((error) => {
+        console.error(error);
+      });
+    }
+  }, [save, social]);
 
   useEffect(() => {
     if (data && !loading) {
@@ -1312,18 +1943,51 @@ export default function RamadanGoals() {
     }
   }, [data, loading]);
 
-  const handleOnboardingComplete = (name, goals) => {
-    save({ ...data, userName: name, goals, checkins: data.checkins || {} });
+  const handleOnboardingComplete = (name, goals, ramadanSetup) => {
+    const nextRamadan = {
+      ...DEFAULT_APP_DATA.ramadan,
+      ...(data?.ramadan || {}),
+      sourceMode: ramadanSetup?.sourceMode || "global",
+      locationCity: ramadanSetup?.locationCity || RAMADAN_DEFAULT_CITY,
+      locationCountry: ramadanSetup?.locationCountry || RAMADAN_DEFAULT_COUNTRY,
+      manualStart: ramadanSetup?.manualStart || "",
+      manualEnd: ramadanSetup?.manualEnd || "",
+      setupComplete: true,
+    };
+
+    if (nextRamadan.sourceMode === "manual") {
+      const validation = validateRamadanWindow(nextRamadan.manualStart, nextRamadan.manualEnd);
+      if (validation.ok) {
+        nextRamadan.resolvedStart = nextRamadan.manualStart;
+        nextRamadan.resolvedEnd = nextRamadan.manualEnd;
+        nextRamadan.resolvedSeasonYear = validation.seasonYear;
+        nextRamadan.resolvedSource = "manual";
+        nextRamadan.resolvedHijriYear = null;
+        nextRamadan.resolvedCacheKey = "manual|manual|global";
+        nextRamadan.resolveError = "";
+      }
+    }
+
+    saveWithCloudSync({
+      ...data,
+      userName: name,
+      goals,
+      checkins: data?.checkins || {},
+      ramadan: nextRamadan,
+    });
+    if (nextRamadan.sourceMode !== "manual") {
+      ramadanTools.retryRamadanResolve();
+    }
     setHasOnboarded(true);
   };
 
   const handleReset = () => {
-    save({ goals: [], checkins: {}, groups: [], userName: "" });
+    saveWithCloudSync({ ...DEFAULT_APP_DATA }, { skipCloud: true });
     setHasOnboarded(false);
     setTab("today");
   };
 
-  if (loading || hasOnboarded === null) {
+  if (loading || hasOnboarded === null || (hasOnboarded && ramadanTools.ramadanStatus === "loading")) {
     return (
       <div style={{
         minHeight: "100vh",
@@ -1338,8 +2002,19 @@ export default function RamadanGoals() {
   }
 
   if (!hasOnboarded) {
-    return <Onboarding onComplete={handleOnboardingComplete} />;
+    return (
+      <Onboarding
+        onComplete={handleOnboardingComplete}
+        seasonYear={ramadanTools.ramadanWindow?.seasonYear || CURRENT_YEAR}
+      />
+    );
   }
+
+  const shouldShowRamadanManualFallback = (
+    hasOnboarded
+    && ramadanTools.ramadanStatus === "needs_manual"
+    && ramadanTools.ramadanSourceMode !== "manual"
+  );
 
   const tabs = [
     { id: "today", icon: "☀️", label: "Today" },
@@ -1377,10 +2052,31 @@ export default function RamadanGoals() {
 
       {/* Content */}
       <div style={{ animation: "fadeIn 0.3s ease-out" }}>
-        {tab === "today" && <TodayScreen data={data} save={save} onReset={handleReset} />}
-        {tab === "progress" && <ProgressScreen data={data} save={save} />}
-        {tab === "circle" && <CircleScreen data={data} save={save} />}
+        {tab === "today" && (
+          <TodayScreen
+            data={data}
+            save={saveWithCloudSync}
+            onReset={handleReset}
+            ramadanWindow={ramadanTools.ramadanWindow}
+            ramadanTools={ramadanTools}
+          />
+        )}
+        {tab === "progress" && (
+          <ProgressScreen
+            data={data}
+            save={saveWithCloudSync}
+            ramadanWindow={ramadanTools.ramadanWindow}
+          />
+        )}
+        {tab === "circle" && <CircleScreen data={data} social={social} />}
       </div>
+
+      {shouldShowRamadanManualFallback && (
+        <RamadanManualFallbackModal
+          error={ramadanTools.ramadanError}
+          onSaveManual={ramadanTools.saveManualRamadanWindow}
+        />
+      )}
 
       {/* Bottom Tab Bar */}
       <div style={{
