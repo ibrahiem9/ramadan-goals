@@ -44,13 +44,15 @@
         ALADHAN_BASE_URL: "https://api.aladhan.com/v1"
       };
     </script>
+    <!-- Map absolute /src/* imports for blob-bootstrapped modules and subpath hosting. -->
     <script type="importmap">
       {
         "imports": {
           "react": "https://esm.sh/react@18.3.1",
           "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
           "react/jsx-runtime": "https://esm.sh/react@18.3.1/jsx-runtime",
-          "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2.49.4"
+          "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2.49.4",
+          "/src/": "./src/"
         }
       }
     </script>
