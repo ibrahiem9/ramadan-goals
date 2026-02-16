@@ -14,6 +14,11 @@ Then open [http://localhost:3000](http://localhost:3000) in your browser.
 
 No build step or dependencies required. The app runs entirely in the browser using React loaded from a CDN.
 
+## Troubleshooting startup logs
+
+- `ERR_BLOCKED_BY_CLIENT` for domains like `sessions.bugsnag.com` or `cdn.segment.com` is usually caused by browser extensions or privacy filters. These logs are typically non-fatal for this app.
+- Treat `Failed to bootstrap app:` as the fatal startup signal. If it mentions a `/src/...` module specifier, hard-refresh and verify deployed `src/` files return HTTP `200` in the browser Network panel.
+
 ## Supabase setup (Circle sharing v1)
 
 Circle sharing + reactions require Supabase configuration.
