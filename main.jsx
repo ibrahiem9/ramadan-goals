@@ -21,6 +21,23 @@ function normalizeRamadanSourceMode(mode) {
   return RAMADAN_SOURCE_MODES.includes(mode) ? mode : "global";
 }
 
+function getCountGoalTarget(goal) {
+  const target = Number(goal?.target);
+  return Number.isFinite(target) && target > 0 ? target : 1;
+}
+
+function clampCountGoalValue(goal, value) {
+  const numericValue = Number(value);
+  const safeValue = Number.isFinite(numericValue) ? numericValue : 0;
+  const nonNegativeValue = Math.max(0, safeValue);
+
+  if (goal?.fixed) {
+    return Math.min(nonNegativeValue, getCountGoalTarget(goal));
+  }
+
+  return nonNegativeValue;
+}
+
 // ─── Animated Counter ───────────────────────────────
 function AnimatedNumber({ value, max }) {
   const pct = max > 0 ? Math.min(value / max, 1) : 0;
@@ -352,6 +369,9 @@ function AddGoalModal({ onAdd, onClose }) {
 // ─── Edit Value Modal ───────────────────────────────
 function EditValueModal({ goal, value, onSave, onDelete, onClose }) {
   const [val, setVal] = useState(value);
+  const countTarget = getCountGoalTarget(goal);
+  const disableIncrement = goal.type === "count" && goal.fixed && val >= countTarget;
+
   return (
     <div style={{
       position: "fixed", inset: 0, zIndex: 100,
@@ -383,7 +403,7 @@ function EditValueModal({ goal, value, onSave, onDelete, onClose }) {
           </div>
         ) : (
           <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 16, marginBottom: 20 }}>
-            <button onClick={() => setVal(Math.max(0, val - 1))} style={{
+            <button onClick={() => setVal((prev) => clampCountGoalValue(goal, prev - 1))} style={{
               width: 48, height: 48, borderRadius: 16, background: "rgba(255,255,255,0.08)",
               border: "1px solid rgba(255,255,255,0.12)", color: "#fff", fontSize: 24,
               cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
@@ -392,14 +412,20 @@ function EditValueModal({ goal, value, onSave, onDelete, onClose }) {
               fontSize: 36, fontWeight: 700, color: "#fff", fontFamily: "'DM Sans', sans-serif",
               minWidth: 60, textAlign: "center",
             }}>{val}</span>
-            <button onClick={() => setVal(val + 1)} style={{
+            <button
+              disabled={disableIncrement}
+              onClick={() => setVal((prev) => clampCountGoalValue(goal, prev + 1))}
+              style={{
               width: 48, height: 48, borderRadius: 16, background: "rgba(255,255,255,0.08)",
               border: "1px solid rgba(255,255,255,0.12)", color: "#fff", fontSize: 24,
-              cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
-            }}>+</button>
+              cursor: disableIncrement ? "default" : "pointer",
+              opacity: disableIncrement ? 0.45 : 1,
+              display: "flex", alignItems: "center", justifyContent: "center",
+            }}
+            >+</button>
           </div>
         )}
-        <button onClick={() => onSave(val)} style={{
+        <button onClick={() => onSave(goal.type === "count" ? clampCountGoalValue(goal, val) : (val >= 1 ? 1 : 0))} style={{
           width: "100%", background: "linear-gradient(135deg, #22c55e, #16a34a)",
           border: "none", borderRadius: 14, padding: "14px", color: "#fff",
           fontSize: 16, fontWeight: 700, cursor: "pointer", fontFamily: "'DM Sans', sans-serif",
@@ -708,7 +734,10 @@ function DayDetailModal({ date, goals, checkins, onSave, onClose, ramadanWindow 
 
   const handleGoalTap = (goal) => {
     const current = dayCheckins[goal.id] || 0;
-    const newVal = goal.type === "boolean" ? (current >= 1 ? 0 : 1) : current + 1;
+    const newVal = goal.type === "boolean"
+      ? (current >= 1 ? 0 : 1)
+      : clampCountGoalValue(goal, current + 1);
+    if (newVal === current) return;
     onSave(date, goal.id, newVal);
   };
 
@@ -748,6 +777,7 @@ function DayDetailModal({ date, goals, checkins, onSave, onClose, ramadanWindow 
           {goals.map(goal => {
             const val = dayCheckins[goal.id] || 0;
             const done = val >= goal.target;
+            const disableIncrement = goal.type === "count" && goal.fixed && val >= getCountGoalTarget(goal);
             return (
               <div
                 key={goal.id}
@@ -797,12 +827,18 @@ function DayDetailModal({ date, goals, checkins, onSave, onClose, ramadanWindow 
                       fontSize: 16, fontWeight: 700, color: "#fff",
                       fontFamily: "'DM Sans', sans-serif", minWidth: 28, textAlign: "center",
                     }}>{val}</span>
-                    <button onClick={() => handleGoalTap(goal)} style={{
+                    <button
+                      disabled={disableIncrement}
+                      onClick={() => handleGoalTap(goal)}
+                      style={{
                       width: 32, height: 32, borderRadius: 10,
                       background: "rgba(255,255,255,0.08)", border: "none",
-                      color: "#fff", fontSize: 18, cursor: "pointer",
+                      color: "#fff", fontSize: 18,
+                      opacity: disableIncrement ? 0.45 : 1,
+                      cursor: disableIncrement ? "default" : "pointer",
                       display: "flex", alignItems: "center", justifyContent: "center",
-                    }}>+</button>
+                    }}
+                    >+</button>
                   </div>
                 )}
               </div>
@@ -1192,14 +1228,23 @@ function TodayScreen({ data, save, onReset, ramadanWindow, ramadanTools }) {
 
   const handleTap = (goal) => {
     const current = dayCheckins[goal.id] || 0;
-    const newVal = goal.type === "boolean" ? (current >= 1 ? 0 : 1) : current + 1;
+    const newVal = goal.type === "boolean"
+      ? (current >= 1 ? 0 : 1)
+      : clampCountGoalValue(goal, current + 1);
+    if (newVal === current) return;
     const newCheckins = { ...data.checkins, [today]: { ...dayCheckins, [goal.id]: newVal } };
     save({ ...data, checkins: newCheckins });
   };
 
   const handleEditSave = (val) => {
     const goal = data.goals[editIdx];
-    const newCheckins = { ...data.checkins, [today]: { ...dayCheckins, [goal.id]: val } };
+    const current = dayCheckins[goal.id] || 0;
+    const nextVal = goal.type === "boolean" ? (val >= 1 ? 1 : 0) : clampCountGoalValue(goal, val);
+    if (nextVal === current) {
+      setEditIdx(null);
+      return;
+    }
+    const newCheckins = { ...data.checkins, [today]: { ...dayCheckins, [goal.id]: nextVal } };
     save({ ...data, checkins: newCheckins });
     setEditIdx(null);
   };

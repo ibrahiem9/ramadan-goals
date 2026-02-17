@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { DEFAULT_APP_DATA, STORAGE_KEY } from "/src/constants/app.js";
-import { migrateCheckins, normalizeAppData } from "/src/lib/data.js";
+import { migrateCheckins, migrateSalahGoalConfig, normalizeAppData } from "/src/lib/data.js";
 
 export function useStorage() {
   const [data, setData] = useState(null);
@@ -13,11 +13,31 @@ export function useStorage() {
         const result = await window.storage.get(STORAGE_KEY);
         if (result && result.value) {
           const parsed = normalizeAppData(JSON.parse(result.value));
-          if (parsed.goals && parsed.checkins && !parsed.checkins._migrated) {
-            parsed.checkins = migrateCheckins(parsed.checkins, parsed.goals);
-            await window.storage.set(STORAGE_KEY, JSON.stringify(parsed));
+          let nextData = parsed;
+          let shouldPersist = false;
+
+          if (nextData.goals && nextData.checkins && !nextData.checkins._migrated) {
+            nextData = {
+              ...nextData,
+              checkins: migrateCheckins(nextData.checkins, nextData.goals),
+            };
+            shouldPersist = true;
           }
-          setData(parsed);
+
+          const salahMigration = migrateSalahGoalConfig(nextData.goals, nextData.checkins);
+          if (salahMigration.changed) {
+            nextData = {
+              ...nextData,
+              goals: salahMigration.goals,
+              checkins: salahMigration.checkins,
+            };
+            shouldPersist = true;
+          }
+
+          if (shouldPersist) {
+            await window.storage.set(STORAGE_KEY, JSON.stringify(nextData));
+          }
+          setData(nextData);
         } else {
           setData({ ...DEFAULT_APP_DATA });
         }
