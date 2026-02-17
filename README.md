@@ -26,6 +26,7 @@ Circle sharing + reactions require Supabase configuration.
 1. Create a Supabase project.
 2. Run the SQL script in `supabase/friend-sharing-v1.sql` in the Supabase SQL editor.
 3. Set your project values in `index.html` under `window.__APP_CONFIG__`:
+4. If your project already ran an older Circle schema, run `supabase/friend-sharing-v1-rls-hotfix.sql` once to patch RLS policies.
 
 ```js
 window.__APP_CONFIG__ = {
