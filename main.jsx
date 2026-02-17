@@ -49,7 +49,7 @@ function AnimatedNumber({ value, max }) {
 }
 
 // ─── Goal Card ──────────────────────────────────────
-function GoalCard({ goal, value, onTap, onLongPress, completed }) {
+function GoalCard({ goal, value, onTap, onLongPress, onEditTarget, completed }) {
   const [pressed, setPressed] = useState(false);
   const [celebrate, setCelebrate] = useState(false);
   const longRef = useRef(null);
@@ -123,6 +123,19 @@ function GoalCard({ goal, value, onTap, onLongPress, completed }) {
             : `${value} / ${goal.target} ${goal.unit}`}
         </div>
       </div>
+      {goal.type === "count" && !goal.fixed && onEditTarget && (
+        <button
+          onClick={(e) => { e.stopPropagation(); onEditTarget(); }}
+          onPointerDown={(e) => e.stopPropagation()}
+          onPointerUp={(e) => e.stopPropagation()}
+          style={{
+            background: "rgba(255,255,255,0.08)", border: "none",
+            borderRadius: 8, padding: "6px 8px", cursor: "pointer",
+            color: "rgba(255,255,255,0.4)", fontSize: 14, lineHeight: 1,
+            transition: "color 0.2s",
+          }}
+        >⚙</button>
+      )}
       {goal.type === "count" ? (
         <AnimatedNumber value={value} max={goal.target} />
       ) : (
@@ -344,6 +357,56 @@ function AddGoalModal({ onAdd, onClose }) {
             </div>
           </>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Edit Target Modal ──────────────────────────────
+function EditTargetModal({ goal, onSave, onClose }) {
+  const [target, setTarget] = useState(goal.target);
+  return (
+    <div style={{
+      position: "fixed", inset: 0, zIndex: 100,
+      background: "rgba(0,0,0,0.6)", backdropFilter: "blur(8px)",
+      display: "flex", alignItems: "center", justifyContent: "center",
+      animation: "fadeIn 0.2s",
+    }} onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} style={{
+        background: "linear-gradient(180deg, #1e293b, #0f172a)",
+        borderRadius: 24, padding: "28px 24px", width: "85%", maxWidth: 340,
+        animation: "scaleIn 0.25s cubic-bezier(.4,0,.2,1)",
+      }}>
+        <div style={{ fontSize: 28, textAlign: "center", marginBottom: 8 }}>{goal.icon}</div>
+        <h3 style={{
+          fontSize: 18, fontWeight: 700, color: "#fff", textAlign: "center",
+          fontFamily: "'Playfair Display', serif", marginBottom: 6,
+        }}>{goal.title}</h3>
+        <div style={{
+          fontSize: 13, color: "rgba(255,255,255,0.45)", textAlign: "center",
+          fontFamily: "'DM Sans', sans-serif", marginBottom: 20,
+        }}>Set daily target ({goal.unit})</div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 16, marginBottom: 20 }}>
+          <button onClick={() => setTarget(Math.max(1, target - 1))} style={{
+            width: 48, height: 48, borderRadius: 16, background: "rgba(255,255,255,0.08)",
+            border: "1px solid rgba(255,255,255,0.12)", color: "#fff", fontSize: 24,
+            cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
+          }}>−</button>
+          <span style={{
+            fontSize: 36, fontWeight: 700, color: "#fff", fontFamily: "'DM Sans', sans-serif",
+            minWidth: 60, textAlign: "center",
+          }}>{target}</span>
+          <button onClick={() => setTarget(target + 1)} style={{
+            width: 48, height: 48, borderRadius: 16, background: "rgba(255,255,255,0.08)",
+            border: "1px solid rgba(255,255,255,0.12)", color: "#fff", fontSize: 24,
+            cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
+          }}>+</button>
+        </div>
+        <button onClick={() => onSave(target)} style={{
+          width: "100%", background: "linear-gradient(135deg, #22c55e, #16a34a)",
+          border: "none", borderRadius: 14, padding: "14px", color: "#fff",
+          fontSize: 16, fontWeight: 700, cursor: "pointer", fontFamily: "'DM Sans', sans-serif",
+        }}>Save Target</button>
       </div>
     </div>
   );
@@ -582,7 +645,7 @@ function SettingsModal({ data, save, ramadanWindow, ramadanTools, onClose, onRes
           {sourceMode === "manual" && (
             <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 10 }}>
               <input
-                placeholder="Start date (YYYY-MM-DD)"
+                type="date"
                 value={manualStart}
                 onChange={(e) => setManualStart(e.target.value)}
                 style={{
@@ -590,10 +653,11 @@ function SettingsModal({ data, save, ramadanWindow, ramadanTools, onClose, onRes
                   border: "1px solid rgba(255,255,255,0.12)", borderRadius: 12,
                   padding: "10px 12px", color: "#fff", fontSize: 14,
                   fontFamily: "'DM Sans', sans-serif", outline: "none",
+                  colorScheme: "dark",
                 }}
               />
               <input
-                placeholder="End date (YYYY-MM-DD)"
+                type="date"
                 value={manualEnd}
                 onChange={(e) => setManualEnd(e.target.value)}
                 style={{
@@ -601,6 +665,7 @@ function SettingsModal({ data, save, ramadanWindow, ramadanTools, onClose, onRes
                   border: "1px solid rgba(255,255,255,0.12)", borderRadius: 12,
                   padding: "10px 12px", color: "#fff", fontSize: 14,
                   fontFamily: "'DM Sans', sans-serif", outline: "none",
+                  colorScheme: "dark",
                 }}
               />
             </div>
@@ -858,7 +923,7 @@ function RamadanManualFallbackModal({ error, onSaveManual }) {
         )}
         <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 10 }}>
           <input
-            placeholder="Start date (YYYY-MM-DD)"
+            type="date"
             value={start}
             onChange={(e) => setStart(e.target.value)}
             style={{
@@ -866,10 +931,11 @@ function RamadanManualFallbackModal({ error, onSaveManual }) {
               border: "1px solid rgba(255,255,255,0.12)", borderRadius: 12,
               padding: "10px 12px", color: "#fff", fontSize: 14,
               fontFamily: "'DM Sans', sans-serif", outline: "none",
+              colorScheme: "dark",
             }}
           />
           <input
-            placeholder="End date (YYYY-MM-DD)"
+            type="date"
             value={end}
             onChange={(e) => setEnd(e.target.value)}
             style={{
@@ -877,6 +943,7 @@ function RamadanManualFallbackModal({ error, onSaveManual }) {
               border: "1px solid rgba(255,255,255,0.12)", borderRadius: 12,
               padding: "10px 12px", color: "#fff", fontSize: 14,
               fontFamily: "'DM Sans', sans-serif", outline: "none",
+              colorScheme: "dark",
             }}
           />
         </div>
@@ -1058,7 +1125,7 @@ function Onboarding({ onComplete, seasonYear }) {
           {sourceMode === "manual" && (
             <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 16 }}>
               <input
-                placeholder="Start date (YYYY-MM-DD)"
+                type="date"
                 value={manualStart}
                 onChange={(e) => setManualStart(e.target.value)}
                 style={{
@@ -1066,10 +1133,11 @@ function Onboarding({ onComplete, seasonYear }) {
                   border: "1px solid rgba(255,255,255,0.12)", borderRadius: 12,
                   padding: "12px 14px", color: "#fff", fontSize: 14,
                   fontFamily: "'DM Sans', sans-serif", outline: "none", boxSizing: "border-box",
+                  colorScheme: "dark",
                 }}
               />
               <input
-                placeholder="End date (YYYY-MM-DD)"
+                type="date"
                 value={manualEnd}
                 onChange={(e) => setManualEnd(e.target.value)}
                 style={{
@@ -1077,6 +1145,7 @@ function Onboarding({ onComplete, seasonYear }) {
                   border: "1px solid rgba(255,255,255,0.12)", borderRadius: 12,
                   padding: "12px 14px", color: "#fff", fontSize: 14,
                   fontFamily: "'DM Sans', sans-serif", outline: "none", boxSizing: "border-box",
+                  colorScheme: "dark",
                 }}
               />
             </div>
@@ -1185,6 +1254,7 @@ function Onboarding({ onComplete, seasonYear }) {
 function TodayScreen({ data, save, onReset, ramadanWindow, ramadanTools }) {
   const [showAdd, setShowAdd] = useState(false);
   const [editIdx, setEditIdx] = useState(null);
+  const [editTargetIdx, setEditTargetIdx] = useState(null);
   const [showSettings, setShowSettings] = useState(false);
   const today = todayStr();
   const ramDay = getRamadanDay(today, ramadanWindow);
@@ -1213,6 +1283,14 @@ function TodayScreen({ data, save, onReset, ramadanWindow, ramadanTools }) {
   const handleAddGoal = (goal) => {
     save({ ...data, goals: [...data.goals, goal] });
     setShowAdd(false);
+  };
+
+  const handleEditTarget = (newTarget) => {
+    const newGoals = data.goals.map((g, i) =>
+      i === editTargetIdx ? { ...g, target: newTarget } : g
+    );
+    save({ ...data, goals: newGoals });
+    setEditTargetIdx(null);
   };
 
   const completedCount = data.goals.filter(g => (dayCheckins[g.id] || 0) >= g.target).length;
@@ -1274,6 +1352,7 @@ function TodayScreen({ data, save, onReset, ramadanWindow, ramadanTools }) {
             completed={(dayCheckins[goal.id] || 0) >= goal.target}
             onTap={() => handleTap(goal)}
             onLongPress={() => setEditIdx(idx)}
+            onEditTarget={goal.type === "count" && !goal.fixed ? () => setEditTargetIdx(idx) : undefined}
           />
         ))}
       </div>
@@ -1294,6 +1373,13 @@ function TodayScreen({ data, save, onReset, ramadanWindow, ramadanTools }) {
           onSave={handleEditSave}
           onDelete={handleDelete}
           onClose={() => setEditIdx(null)}
+        />
+      )}
+      {editTargetIdx !== null && (
+        <EditTargetModal
+          goal={data.goals[editTargetIdx]}
+          onSave={handleEditTarget}
+          onClose={() => setEditTargetIdx(null)}
         />
       )}
       {showSettings && (
@@ -1939,6 +2025,19 @@ export default function RamadanGoals() {
 
   useEffect(() => {
     if (data && !loading) {
+      // Migrate Salah boolean goals to count type (idempotent)
+      const salahGoals = (data.goals || []).filter(
+        (g) => g.title === "Salah on time" && g.type === "boolean"
+      );
+      if (salahGoals.length > 0) {
+        const migratedGoals = data.goals.map((g) =>
+          g.title === "Salah on time" && g.type === "boolean"
+            ? { ...g, type: "count", target: 5, unit: "prayers", fixed: true }
+            : g
+        );
+        save({ ...data, goals: migratedGoals });
+      }
+
       setHasOnboarded(data.userName && data.goals && data.goals.length > 0);
     }
   }, [data, loading]);

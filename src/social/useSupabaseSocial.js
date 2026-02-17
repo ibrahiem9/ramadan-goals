@@ -74,7 +74,13 @@ export function useSupabaseSocial(data, save, ramadanWindow) {
         emailRedirectTo: window.location.origin,
       },
     });
-    throwIfSocialError(signInError);
+    if (signInError) {
+        const msg = typeof signInError.message === "string" ? signInError.message : "";
+        if (/rate.?limit|too many requests/i.test(msg)) {
+          throw new Error("Too many sign-in attempts. Please wait a few minutes before trying again.");
+        }
+        throwIfSocialError(signInError);
+      }
   }, [backendReady]);
 
   const authSignOut = useCallback(async () => {
