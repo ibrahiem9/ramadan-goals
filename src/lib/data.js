@@ -2,6 +2,10 @@ import { DEFAULT_APP_DATA, RAMADAN_END, RAMADAN_START } from "/src/constants/app
 import { TEMPLATES } from "/src/constants/templates.js";
 import { clampRamadanDate, getDaysInRange, todayStr } from "/src/lib/date.js";
 
+const SALAH_GOAL_TITLE = "Salah on time";
+const SALAH_DAILY_TARGET = 5;
+const SALAH_UNIT = "prayers";
+
 export function normalizeAppData(raw) {
   const parsed = raw && typeof raw === "object" ? raw : {};
   const merged = {
@@ -75,6 +79,84 @@ export function buildCircleSnapshot(localData, ramadanWindow, snapshotDate = tod
 export function inferGoalIcon(title) {
   const template = TEMPLATES.find((item) => item.title === title);
   return template ? template.icon : "⭐";
+}
+
+function clampSalahCheckinValue(value) {
+  const numericValue = Number(value);
+  const safeValue = Number.isFinite(numericValue) ? numericValue : 0;
+  return Math.max(0, Math.min(SALAH_DAILY_TARGET, safeValue));
+}
+
+export function migrateSalahGoalConfig(goals, checkins) {
+  const safeGoals = Array.isArray(goals) ? goals : [];
+  const safeCheckins = checkins && typeof checkins === "object" ? checkins : {};
+  let goalsChanged = false;
+
+  const salahGoalIds = [];
+  const migratedGoals = safeGoals.map((goal) => {
+    if (!goal || goal.title !== SALAH_GOAL_TITLE) return goal;
+
+    if (goal.id) salahGoalIds.push(goal.id);
+
+    const nextGoal = {
+      ...goal,
+      type: "count",
+      target: SALAH_DAILY_TARGET,
+      unit: SALAH_UNIT,
+      fixed: true,
+    };
+
+    if (
+      goal.type !== nextGoal.type ||
+      goal.target !== nextGoal.target ||
+      goal.unit !== nextGoal.unit ||
+      goal.fixed !== nextGoal.fixed
+    ) {
+      goalsChanged = true;
+    }
+
+    return nextGoal;
+  });
+
+  if (salahGoalIds.length === 0) {
+    return {
+      goals: goalsChanged ? migratedGoals : safeGoals,
+      checkins: safeCheckins,
+      changed: goalsChanged,
+    };
+  }
+
+  let checkinsChanged = false;
+  const migratedCheckins = {};
+  Object.keys(safeCheckins).forEach((dateStr) => {
+    const dayData = safeCheckins[dateStr];
+    if (!dayData || typeof dayData !== "object") {
+      migratedCheckins[dateStr] = dayData;
+      return;
+    }
+
+    let dayChanged = false;
+    const nextDay = { ...dayData };
+
+    salahGoalIds.forEach((goalId) => {
+      if (!Object.prototype.hasOwnProperty.call(nextDay, goalId)) return;
+
+      const clampedValue = clampSalahCheckinValue(nextDay[goalId]);
+      if (clampedValue !== nextDay[goalId]) {
+        dayChanged = true;
+        nextDay[goalId] = clampedValue;
+      }
+    });
+
+    migratedCheckins[dateStr] = dayChanged ? nextDay : dayData;
+    if (dayChanged) checkinsChanged = true;
+  });
+
+  return {
+    goals: goalsChanged ? migratedGoals : safeGoals,
+    checkins: checkinsChanged ? migratedCheckins : safeCheckins,
+    changed: goalsChanged || checkinsChanged,
+  };
 }
 
 export function migrateCheckins(checkins, goals) {
