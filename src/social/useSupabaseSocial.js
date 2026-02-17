@@ -23,6 +23,22 @@ const supabase = HAS_SUPABASE
     })
   : null;
 
+const RLS_HOTFIX_HINT =
+  "Supabase Circle policies are outdated. Run supabase/friend-sharing-v1-rls-hotfix.sql in the Supabase SQL editor.";
+
+function normalizeSocialError(error, fallbackMessage = "Unexpected social backend error.") {
+  if (error?.code === "42P17") {
+    return new Error(RLS_HOTFIX_HINT);
+  }
+  if (error instanceof Error) return error;
+  const message = typeof error?.message === "string" ? error.message.trim() : "";
+  return new Error(message || fallbackMessage);
+}
+
+function throwIfSocialError(error) {
+  if (error) throw normalizeSocialError(error);
+}
+
 export function useSupabaseSocial(data, save, ramadanWindow) {
   const [session, setSession] = useState(null);
   const [circles, setCircles] = useState([]);
@@ -59,19 +75,19 @@ export function useSupabaseSocial(data, save, ramadanWindow) {
       },
     });
     if (signInError) {
-      const msg = typeof signInError.message === "string" ? signInError.message : "";
-      if (/rate.?limit|too many requests/i.test(msg)) {
-        throw new Error("Too many sign-in attempts. Please wait a few minutes before trying again.");
+        const msg = typeof signInError.message === "string" ? signInError.message : "";
+        if (/rate.?limit|too many requests/i.test(msg)) {
+          throw new Error("Too many sign-in attempts. Please wait a few minutes before trying again.");
+        }
+        throwIfSocialError(signInError);
       }
-      throw signInError;
-    }
   }, [backendReady]);
 
   const authSignOut = useCallback(async () => {
     if (!backendReady) return;
     setError("");
     const { error: signOutError } = await supabase.auth.signOut();
-    if (signOutError) throw signOutError;
+    throwIfSocialError(signOutError);
   }, [backendReady]);
 
   const ensureProfile = useCallback(async (localData = data) => {
@@ -85,7 +101,7 @@ export function useSupabaseSocial(data, save, ramadanWindow) {
       },
       { onConflict: "id" }
     );
-    if (upsertError) throw upsertError;
+    throwIfSocialError(upsertError);
   }, [backendReady, data, session?.user]);
 
   const upsertGoal = useCallback(async (goal) => {
@@ -102,7 +118,7 @@ export function useSupabaseSocial(data, save, ramadanWindow) {
       },
       { onConflict: "id" }
     );
-    if (goalError) throw goalError;
+    throwIfSocialError(goalError);
   }, [backendReady, session?.user]);
 
   const upsertCheckin = useCallback(async (goalId, date, value) => {
@@ -115,7 +131,7 @@ export function useSupabaseSocial(data, save, ramadanWindow) {
       .eq("goal_id", goalId)
       .eq("checkin_date", date)
       .maybeSingle();
-    if (existingError) throw existingError;
+    throwIfSocialError(existingError);
 
     const merged = Math.max(Number(existing?.value) || 0, parsedValue);
     const { error: upsertError } = await supabase.from("user_goal_checkins").upsert(
@@ -127,7 +143,7 @@ export function useSupabaseSocial(data, save, ramadanWindow) {
       },
       { onConflict: "user_id,goal_id,checkin_date" }
     );
-    if (upsertError) throw upsertError;
+    throwIfSocialError(upsertError);
   }, [backendReady, session?.user]);
 
   const listUserCircles = useCallback(async () => {
@@ -136,7 +152,7 @@ export function useSupabaseSocial(data, save, ramadanWindow) {
       .from("circle_members")
       .select("circle_id, role")
       .eq("user_id", session.user.id);
-    if (membershipError) throw membershipError;
+    throwIfSocialError(membershipError);
 
     if (!memberships?.length) {
       setCircles([]);
@@ -151,7 +167,7 @@ export function useSupabaseSocial(data, save, ramadanWindow) {
       .in("id", circleIds)
       .eq("is_active", true)
       .order("created_at", { ascending: false });
-    if (circlesError) throw circlesError;
+    throwIfSocialError(circlesError);
 
     const hydrated = (circlesData || []).map((circle) => ({
       ...circle,
@@ -182,7 +198,7 @@ export function useSupabaseSocial(data, save, ramadanWindow) {
       .eq("circle_id", circleId)
       .order("source_updated_at", { ascending: false })
       .limit(60);
-    if (updatesError) throw updatesError;
+    throwIfSocialError(updatesError);
 
     const userIds = [...new Set((updates || []).map((row) => row.user_id))];
     const updateIds = (updates || []).map((row) => row.id);
@@ -201,8 +217,8 @@ export function useSupabaseSocial(data, save, ramadanWindow) {
             .in("update_id", updateIds)
         : Promise.resolve({ data: [], error: null }),
     ]);
-    if (profilesError) throw profilesError;
-    if (reactionError) throw reactionError;
+    throwIfSocialError(profilesError);
+    throwIfSocialError(reactionError);
 
     const profileNameById = new Map(
       (profiles || []).map((profile) => [profile.id, profile.display_name || "Member"])
@@ -256,7 +272,7 @@ export function useSupabaseSocial(data, save, ramadanWindow) {
       },
       { onConflict: "circle_id,user_id,snapshot_date" }
     );
-    if (snapshotError) throw snapshotError;
+    throwIfSocialError(snapshotError);
   }, [backendReady, ramadanWindow, session?.user]);
 
   const syncFromLocal = useCallback(async (localData) => {
@@ -321,7 +337,7 @@ export function useSupabaseSocial(data, save, ramadanWindow) {
       .from("user_goals")
       .select("id", { count: "exact", head: true })
       .eq("user_id", session.user.id);
-    if (countError) throw countError;
+    throwIfSocialError(countError);
     if ((count || 0) > 0) return;
     await syncFromLocal(localData);
   }, [backendReady, session?.user, syncFromLocal]);
@@ -341,8 +357,8 @@ export function useSupabaseSocial(data, save, ramadanWindow) {
           .select("goal_id, checkin_date, value")
           .eq("user_id", session.user.id),
       ]);
-    if (goalError) throw goalError;
-    if (checkinError) throw checkinError;
+    throwIfSocialError(goalError);
+    throwIfSocialError(checkinError);
 
     const iconByGoalId = new Map((data.goals || []).map((goal) => [goal.id, goal.icon]));
     const cloudGoals = (goalRows || []).map((goal) => ({
@@ -392,14 +408,14 @@ export function useSupabaseSocial(data, save, ramadanWindow) {
       })
       .select("id, name, invite_code, owner_user_id, member_limit, is_active, created_at")
       .single();
-    if (insertError) throw insertError;
+    throwIfSocialError(insertError);
 
     const { error: memberError } = await supabase.from("circle_members").insert({
       circle_id: inserted.id,
       user_id: session.user.id,
       role: "owner",
     });
-    if (memberError) throw memberError;
+    throwIfSocialError(memberError);
 
     const nextCircles = await listUserCircles();
     setActiveCircle(inserted.id);
@@ -413,42 +429,11 @@ export function useSupabaseSocial(data, save, ramadanWindow) {
     if (!normalized) throw new Error("Invite code is required.");
     setError("");
 
-    const { data: circle, error: circleError } = await supabase
-      .from("circles")
-      .select("id, name, invite_code, member_limit, is_active")
-      .eq("invite_code", normalized)
-      .eq("is_active", true)
-      .maybeSingle();
-    if (circleError) throw circleError;
+    const { data: circle, error: joinRpcError } = await supabase
+      .rpc("join_circle_by_invite", { invite_code_input: normalized })
+      .single();
+    throwIfSocialError(joinRpcError);
     if (!circle) throw new Error("Invite code not found.");
-
-    const { count: existingCount, error: existingError } = await supabase
-      .from("circle_members")
-      .select("user_id", { count: "exact", head: true })
-      .eq("circle_id", circle.id)
-      .eq("user_id", session.user.id);
-    if (existingError) throw existingError;
-    if ((existingCount || 0) > 0) {
-      setActiveCircle(circle.id);
-      await listUserCircles();
-      return circle;
-    }
-
-    const { count: memberCount, error: memberCountError } = await supabase
-      .from("circle_members")
-      .select("user_id", { count: "exact", head: true })
-      .eq("circle_id", circle.id);
-    if (memberCountError) throw memberCountError;
-    if ((memberCount || 0) >= (circle.member_limit || MAX_CIRCLE_MEMBERS)) {
-      throw new Error("This circle is already full.");
-    }
-
-    const { error: joinError } = await supabase.from("circle_members").insert({
-      circle_id: circle.id,
-      user_id: session.user.id,
-      role: "member",
-    });
-    if (joinError) throw joinError;
 
     await listUserCircles();
     setActiveCircle(circle.id);
@@ -467,7 +452,7 @@ export function useSupabaseSocial(data, save, ramadanWindow) {
       .eq("user_id", session.user.id)
       .eq("emoji", emoji)
       .maybeSingle();
-    if (existingError) throw existingError;
+    throwIfSocialError(existingError);
 
     if (existing) {
       const { error: deleteError } = await supabase
@@ -476,14 +461,14 @@ export function useSupabaseSocial(data, save, ramadanWindow) {
         .eq("update_id", updateId)
         .eq("user_id", session.user.id)
         .eq("emoji", emoji);
-      if (deleteError) throw deleteError;
+      throwIfSocialError(deleteError);
     } else {
       const { error: insertError } = await supabase.from("circle_update_reactions").insert({
         update_id: updateId,
         user_id: session.user.id,
         emoji,
       });
-      if (insertError) throw insertError;
+      throwIfSocialError(insertError);
     }
     await refreshFeed();
   }, [backendReady, refreshFeed, session?.user]);
@@ -556,8 +541,9 @@ export function useSupabaseSocial(data, save, ramadanWindow) {
           }
         }
       } catch (err) {
-        console.error(err);
-        if (!cancelled) setError(err.message || "Failed to bootstrap social backend.");
+        const normalizedError = normalizeSocialError(err, "Failed to bootstrap social backend.");
+        console.error(normalizedError);
+        if (!cancelled) setError(normalizedError.message);
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -592,7 +578,7 @@ export function useSupabaseSocial(data, save, ramadanWindow) {
           setActiveCircle(targetCircleId);
         }
       } catch (err) {
-        console.error(err);
+        console.error(normalizeSocialError(err));
       }
     })();
     return () => {
@@ -612,8 +598,9 @@ export function useSupabaseSocial(data, save, ramadanWindow) {
         const rows = await getCircleFeed(activeCircleId);
         if (!cancelled) setFeed(rows);
       } catch (err) {
-        console.error(err);
-        if (!cancelled) setError(err.message || "Failed to load circle feed.");
+        const normalizedError = normalizeSocialError(err, "Failed to load circle feed.");
+        console.error(normalizedError);
+        if (!cancelled) setError(normalizedError.message);
       } finally {
         if (!cancelled) setLoading(false);
       }
