@@ -30,9 +30,33 @@ function normalizeSocialError(error, fallbackMessage = "Unexpected social backen
   if (error?.code === "42P17") {
     return new Error(RLS_HOTFIX_HINT);
   }
+  const rawMessage = typeof error?.message === "string" ? error.message.trim() : "";
+  const status = error?.status || error?.statusCode || 0;
+  const combined = `${rawMessage} ${error?.code || ""}`.toLowerCase();
+
+  if (status === 429 || /rate.?limit|over_email_send_rate_limit/.test(combined)) {
+    return new Error("Too many requests. Please wait a moment and try again.");
+  }
+  if (/weak.?password/.test(combined)) {
+    return new Error("Password is too weak. Use at least 6 characters.");
+  }
+  if (/invalid.?login|invalid.?credentials/.test(combined)) {
+    return new Error("Invalid email or password.");
+  }
+  if (/already.?registered|user.?already.?exists/.test(combined)) {
+    return new Error("An account with this email already exists. Try signing in instead.");
+  }
+  if (/provider|oauth|access.?denied/.test(combined)) {
+    return new Error("Authentication provider error. Please try again.");
+  }
+  if (/otp.?expired|token.?expired|invalid.?token/.test(combined)) {
+    return new Error("This link has expired. Please request a new one.");
+  }
+  if (/email.?not.?confirmed/.test(combined)) {
+    return new Error("Please confirm your email address before signing in.");
+  }
   if (error instanceof Error) return error;
-  const message = typeof error?.message === "string" ? error.message.trim() : "";
-  return new Error(message || fallbackMessage);
+  return new Error(rawMessage || fallbackMessage);
 }
 
 function throwIfSocialError(error) {
@@ -46,6 +70,7 @@ export function useSupabaseSocial(data, save, ramadanWindow) {
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState("");
+  const [authRecoveryMode, setAuthRecoveryMode] = useState(false);
   const bootstrappedRef = useRef(false);
 
   const backendReady = HAS_SUPABASE && !!supabase;
@@ -88,6 +113,64 @@ export function useSupabaseSocial(data, save, ramadanWindow) {
     setError("");
     const { error: signOutError } = await supabase.auth.signOut();
     throwIfSocialError(signOutError);
+  }, [backendReady]);
+
+  const authSignUpWithPassword = useCallback(async (email, password) => {
+    if (!backendReady) throw new Error("Supabase is not configured.");
+    setError("");
+    const normalized = (email || "").trim().toLowerCase();
+    if (!normalized) throw new Error("Email is required.");
+    if (!password || password.length < 6) throw new Error("Password must be at least 6 characters.");
+    const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
+      email: normalized,
+      password,
+      options: { emailRedirectTo: window.location.origin },
+    });
+    throwIfSocialError(signUpError);
+    return { needsConfirmation: !signUpData.session };
+  }, [backendReady]);
+
+  const authSignInWithPassword = useCallback(async (email, password) => {
+    if (!backendReady) throw new Error("Supabase is not configured.");
+    setError("");
+    const normalized = (email || "").trim().toLowerCase();
+    if (!normalized) throw new Error("Email is required.");
+    if (!password) throw new Error("Password is required.");
+    const { error: signInError } = await supabase.auth.signInWithPassword({
+      email: normalized,
+      password,
+    });
+    throwIfSocialError(signInError);
+  }, [backendReady]);
+
+  const authRequestPasswordReset = useCallback(async (email) => {
+    if (!backendReady) throw new Error("Supabase is not configured.");
+    setError("");
+    const normalized = (email || "").trim().toLowerCase();
+    if (!normalized) throw new Error("Email is required.");
+    const { error: resetError } = await supabase.auth.resetPasswordForEmail(normalized, {
+      redirectTo: window.location.origin,
+    });
+    throwIfSocialError(resetError);
+  }, [backendReady]);
+
+  const authUpdatePassword = useCallback(async (newPassword) => {
+    if (!backendReady) throw new Error("Supabase is not configured.");
+    setError("");
+    if (!newPassword || newPassword.length < 6) throw new Error("Password must be at least 6 characters.");
+    const { error: updateError } = await supabase.auth.updateUser({ password: newPassword });
+    throwIfSocialError(updateError);
+    setAuthRecoveryMode(false);
+  }, [backendReady]);
+
+  const authSignInWithGoogle = useCallback(async () => {
+    if (!backendReady) throw new Error("Supabase is not configured.");
+    setError("");
+    const { error: oauthError } = await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: { redirectTo: window.location.origin },
+    });
+    throwIfSocialError(oauthError);
   }, [backendReady]);
 
   const ensureProfile = useCallback(async (localData = data) => {
@@ -476,11 +559,14 @@ export function useSupabaseSocial(data, save, ramadanWindow) {
   useEffect(() => {
     if (!backendReady) return;
     let mounted = true;
-    supabase.auth.getSession().then(({ data: authData }) => {
-      if (mounted) setSession(authData.session || null);
+    supabase.auth.getSession().then(({ data: authData, error: sessionError }) => {
+      if (sessionError) console.error("Session recovery error:", sessionError.message);
+      if (mounted) setSession(authData?.session || null);
     });
-    const { data: authSub } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+    const { data: authSub } = supabase.auth.onAuthStateChange((event, nextSession) => {
       setSession(nextSession || null);
+      if (event === "PASSWORD_RECOVERY") setAuthRecoveryMode(true);
+      if (event === "SIGNED_OUT") setAuthRecoveryMode(false);
     });
     return () => {
       mounted = false;
@@ -619,7 +705,13 @@ export function useSupabaseSocial(data, save, ramadanWindow) {
     loading,
     syncing,
     error,
+    authRecoveryMode,
     authSignInWithMagicLink,
+    authSignUpWithPassword,
+    authSignInWithPassword,
+    authRequestPasswordReset,
+    authUpdatePassword,
+    authSignInWithGoogle,
     authSignOut,
     createCircle,
     joinCircleByInvite,

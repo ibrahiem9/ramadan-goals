@@ -1598,8 +1598,38 @@ function CircleScreen({ data, social }) {
   const [groupName, setGroupName] = useState("");
   const [joinCode, setJoinCode] = useState("");
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [localError, setLocalError] = useState("");
+  const [authTab, setAuthTab] = useState("magic-link");
+  const [authMode, setAuthMode] = useState("signin");
+  const [magicLinkSent, setMagicLinkSent] = useState(false);
+  const [resetSent, setResetSent] = useState(false);
+  const [passwordUpdated, setPasswordUpdated] = useState(false);
+  const [signUpConfirmation, setSignUpConfirmation] = useState(false);
+
+  const switchAuthTab = (tab) => {
+    setAuthTab(tab);
+    setAuthMode("signin");
+    setLocalError("");
+    setEmail("");
+    setPassword("");
+    setConfirmPassword("");
+    setMagicLinkSent(false);
+    setResetSent(false);
+    setSignUpConfirmation(false);
+  };
+
+  const switchAuthMode = (mode) => {
+    setAuthMode(mode);
+    setLocalError("");
+    setPassword("");
+    setConfirmPassword("");
+    setResetSent(false);
+    setSignUpConfirmation(false);
+  };
 
   const runAction = async (fn) => {
     setBusy(true);
@@ -1658,41 +1688,296 @@ function CircleScreen({ data, social }) {
             fontSize: 16, fontWeight: 700, color: "#e0f2fe", marginBottom: 10,
             fontFamily: "'DM Sans', sans-serif",
           }}>Sign In to Share</div>
+
+          {/* Google OAuth button */}
+          <button
+            disabled={busy}
+            onClick={() => runAction(() => social.authSignInWithGoogle())}
+            style={{
+              width: "100%", padding: "12px 14px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.18)",
+              background: "rgba(255,255,255,0.08)", color: "#fff", fontWeight: 700, fontSize: 14,
+              cursor: busy ? "default" : "pointer", fontFamily: "'DM Sans', sans-serif",
+              opacity: busy ? 0.5 : 1, marginBottom: 14, display: "flex", alignItems: "center",
+              justifyContent: "center", gap: 8,
+            }}
+          >
+            <span style={{ fontSize: 18 }}>G</span>
+            Continue with Google
+          </button>
+
+          {/* Divider */}
           <div style={{
-            fontSize: 13, color: "rgba(255,255,255,0.7)", marginBottom: 12, lineHeight: 1.5,
-            fontFamily: "'DM Sans', sans-serif",
+            display: "flex", alignItems: "center", gap: 12, marginBottom: 14,
           }}>
-            Use magic-link email sign-in to create private circles and share progress with friends.
+            <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.15)" }} />
+            <span style={{ fontSize: 12, color: "rgba(255,255,255,0.4)", fontFamily: "'DM Sans', sans-serif" }}>or</span>
+            <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.15)" }} />
           </div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <input
-              placeholder="you@example.com"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              style={{
-                flex: 1, background: "rgba(255,255,255,0.08)",
-                border: "1px solid rgba(255,255,255,0.14)", borderRadius: 12,
-                padding: "10px 12px", color: "#fff", fontSize: 14,
-                fontFamily: "'DM Sans', sans-serif", outline: "none",
-              }}
-            />
-            <button
-              disabled={busy || !email.trim()}
-              onClick={() =>
-                runAction(async () => {
-                  await social.authSignInWithMagicLink(email);
-                  setEmail("");
-                })}
-              style={{
-                padding: "10px 14px", borderRadius: 12, border: "none",
-                background: busy || !email.trim()
-                  ? "rgba(255,255,255,0.14)"
-                  : "linear-gradient(135deg, #22c55e, #16a34a)",
-                color: "#fff", fontWeight: 700, cursor: busy || !email.trim() ? "default" : "pointer",
-                fontFamily: "'DM Sans', sans-serif", opacity: busy || !email.trim() ? 0.5 : 1,
-              }}
-            >Send Link</button>
+
+          {/* Tab selector */}
+          <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
+            {[["magic-link", "Magic Link"], ["password", "Email & Password"]].map(([key, label]) => (
+              <button
+                key={key}
+                onClick={() => switchAuthTab(key)}
+                style={{
+                  flex: 1, padding: "9px 10px", borderRadius: 10, border: "none", fontSize: 13,
+                  fontWeight: 600, fontFamily: "'DM Sans', sans-serif", cursor: "pointer",
+                  background: authTab === key ? "rgba(255,255,255,0.16)" : "rgba(255,255,255,0.05)",
+                  color: authTab === key ? "#fff" : "rgba(255,255,255,0.5)",
+                }}
+              >{label}</button>
+            ))}
           </div>
+
+          {/* Magic Link tab */}
+          {authTab === "magic-link" && (
+            <>
+              {magicLinkSent ? (
+                <div style={{
+                  padding: "12px 14px", borderRadius: 12, background: "rgba(34,197,94,0.12)",
+                  border: "1px solid rgba(34,197,94,0.3)", color: "#86efac", fontSize: 13,
+                  fontFamily: "'DM Sans', sans-serif", lineHeight: 1.5,
+                }}>
+                  Magic link sent! Check your email and click the link to sign in.
+                </div>
+              ) : (
+                <div style={{ display: "flex", gap: 8 }}>
+                  <input
+                    placeholder="you@example.com"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    style={{
+                      flex: 1, background: "rgba(255,255,255,0.08)",
+                      border: "1px solid rgba(255,255,255,0.14)", borderRadius: 12,
+                      padding: "10px 12px", color: "#fff", fontSize: 14,
+                      fontFamily: "'DM Sans', sans-serif", outline: "none",
+                    }}
+                  />
+                  <button
+                    disabled={busy || !email.trim()}
+                    onClick={() =>
+                      runAction(async () => {
+                        await social.authSignInWithMagicLink(email);
+                        setMagicLinkSent(true);
+                      })}
+                    style={{
+                      padding: "10px 14px", borderRadius: 12, border: "none",
+                      background: busy || !email.trim()
+                        ? "rgba(255,255,255,0.14)"
+                        : "linear-gradient(135deg, #22c55e, #16a34a)",
+                      color: "#fff", fontWeight: 700, cursor: busy || !email.trim() ? "default" : "pointer",
+                      fontFamily: "'DM Sans', sans-serif", opacity: busy || !email.trim() ? 0.5 : 1,
+                    }}
+                  >Send Link</button>
+                </div>
+              )}
+            </>
+          )}
+
+          {/* Password tab - Sign In */}
+          {authTab === "password" && authMode === "signin" && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <input
+                placeholder="you@example.com"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                style={{
+                  width: "100%", background: "rgba(255,255,255,0.08)",
+                  border: "1px solid rgba(255,255,255,0.14)", borderRadius: 12,
+                  padding: "10px 12px", color: "#fff", fontSize: 14,
+                  fontFamily: "'DM Sans', sans-serif", outline: "none", boxSizing: "border-box",
+                }}
+              />
+              <input
+                placeholder="Password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                style={{
+                  width: "100%", background: "rgba(255,255,255,0.08)",
+                  border: "1px solid rgba(255,255,255,0.14)", borderRadius: 12,
+                  padding: "10px 12px", color: "#fff", fontSize: 14,
+                  fontFamily: "'DM Sans', sans-serif", outline: "none", boxSizing: "border-box",
+                }}
+              />
+              <button
+                disabled={busy || !email.trim() || !password}
+                onClick={() =>
+                  runAction(async () => {
+                    await social.authSignInWithPassword(email, password);
+                  })}
+                style={{
+                  width: "100%", padding: "12px 14px", borderRadius: 12, border: "none",
+                  background: busy || !email.trim() || !password
+                    ? "rgba(255,255,255,0.14)"
+                    : "linear-gradient(135deg, #22c55e, #16a34a)",
+                  color: "#fff", fontWeight: 700, fontSize: 14,
+                  cursor: busy || !email.trim() || !password ? "default" : "pointer",
+                  fontFamily: "'DM Sans', sans-serif",
+                  opacity: busy || !email.trim() || !password ? 0.5 : 1,
+                }}
+              >Sign In</button>
+              <div style={{ display: "flex", justifyContent: "space-between", marginTop: 2 }}>
+                <button
+                  onClick={() => switchAuthMode("signup")}
+                  style={{
+                    background: "none", border: "none", color: "rgba(147,197,253,0.9)",
+                    fontSize: 13, fontFamily: "'DM Sans', sans-serif", cursor: "pointer", padding: 0,
+                  }}
+                >Create account</button>
+                <button
+                  onClick={() => switchAuthMode("forgot")}
+                  style={{
+                    background: "none", border: "none", color: "rgba(147,197,253,0.9)",
+                    fontSize: 13, fontFamily: "'DM Sans', sans-serif", cursor: "pointer", padding: 0,
+                  }}
+                >Forgot password?</button>
+              </div>
+            </div>
+          )}
+
+          {/* Password tab - Sign Up */}
+          {authTab === "password" && authMode === "signup" && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {signUpConfirmation ? (
+                <div style={{
+                  padding: "12px 14px", borderRadius: 12, background: "rgba(34,197,94,0.12)",
+                  border: "1px solid rgba(34,197,94,0.3)", color: "#86efac", fontSize: 13,
+                  fontFamily: "'DM Sans', sans-serif", lineHeight: 1.5,
+                }}>
+                  Account created! Check your email to confirm your address, then sign in.
+                </div>
+              ) : (
+                <>
+                  <input
+                    placeholder="you@example.com"
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    style={{
+                      width: "100%", background: "rgba(255,255,255,0.08)",
+                      border: "1px solid rgba(255,255,255,0.14)", borderRadius: 12,
+                      padding: "10px 12px", color: "#fff", fontSize: 14,
+                      fontFamily: "'DM Sans', sans-serif", outline: "none", boxSizing: "border-box",
+                    }}
+                  />
+                  <input
+                    placeholder="Password (min 6 characters)"
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    style={{
+                      width: "100%", background: "rgba(255,255,255,0.08)",
+                      border: "1px solid rgba(255,255,255,0.14)", borderRadius: 12,
+                      padding: "10px 12px", color: "#fff", fontSize: 14,
+                      fontFamily: "'DM Sans', sans-serif", outline: "none", boxSizing: "border-box",
+                    }}
+                  />
+                  <input
+                    placeholder="Confirm password"
+                    type="password"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    style={{
+                      width: "100%", background: "rgba(255,255,255,0.08)",
+                      border: "1px solid rgba(255,255,255,0.14)", borderRadius: 12,
+                      padding: "10px 12px", color: "#fff", fontSize: 14,
+                      fontFamily: "'DM Sans', sans-serif", outline: "none", boxSizing: "border-box",
+                    }}
+                  />
+                  <button
+                    disabled={busy || !email.trim() || !password || !confirmPassword}
+                    onClick={() =>
+                      runAction(async () => {
+                        if (password !== confirmPassword) throw new Error("Passwords do not match.");
+                        const result = await social.authSignUpWithPassword(email, password);
+                        if (result?.needsConfirmation) {
+                          setSignUpConfirmation(true);
+                        }
+                      })}
+                    style={{
+                      width: "100%", padding: "12px 14px", borderRadius: 12, border: "none",
+                      background: busy || !email.trim() || !password || !confirmPassword
+                        ? "rgba(255,255,255,0.14)"
+                        : "linear-gradient(135deg, #22c55e, #16a34a)",
+                      color: "#fff", fontWeight: 700, fontSize: 14,
+                      cursor: busy || !email.trim() || !password || !confirmPassword ? "default" : "pointer",
+                      fontFamily: "'DM Sans', sans-serif",
+                      opacity: busy || !email.trim() || !password || !confirmPassword ? 0.5 : 1,
+                    }}
+                  >Create Account</button>
+                </>
+              )}
+              <div style={{ marginTop: 2 }}>
+                <button
+                  onClick={() => switchAuthMode("signin")}
+                  style={{
+                    background: "none", border: "none", color: "rgba(147,197,253,0.9)",
+                    fontSize: 13, fontFamily: "'DM Sans', sans-serif", cursor: "pointer", padding: 0,
+                  }}
+                >Already have an account? Sign in</button>
+              </div>
+            </div>
+          )}
+
+          {/* Password tab - Forgot Password */}
+          {authTab === "password" && authMode === "forgot" && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {resetSent ? (
+                <div style={{
+                  padding: "12px 14px", borderRadius: 12, background: "rgba(34,197,94,0.12)",
+                  border: "1px solid rgba(34,197,94,0.3)", color: "#86efac", fontSize: 13,
+                  fontFamily: "'DM Sans', sans-serif", lineHeight: 1.5,
+                }}>
+                  Password reset link sent! Check your email.
+                </div>
+              ) : (
+                <>
+                  <input
+                    placeholder="you@example.com"
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    style={{
+                      width: "100%", background: "rgba(255,255,255,0.08)",
+                      border: "1px solid rgba(255,255,255,0.14)", borderRadius: 12,
+                      padding: "10px 12px", color: "#fff", fontSize: 14,
+                      fontFamily: "'DM Sans', sans-serif", outline: "none", boxSizing: "border-box",
+                    }}
+                  />
+                  <button
+                    disabled={busy || !email.trim()}
+                    onClick={() =>
+                      runAction(async () => {
+                        await social.authRequestPasswordReset(email);
+                        setResetSent(true);
+                      })}
+                    style={{
+                      width: "100%", padding: "12px 14px", borderRadius: 12, border: "none",
+                      background: busy || !email.trim()
+                        ? "rgba(255,255,255,0.14)"
+                        : "linear-gradient(135deg, #22c55e, #16a34a)",
+                      color: "#fff", fontWeight: 700, fontSize: 14,
+                      cursor: busy || !email.trim() ? "default" : "pointer",
+                      fontFamily: "'DM Sans', sans-serif",
+                      opacity: busy || !email.trim() ? 0.5 : 1,
+                    }}
+                  >Send Reset Link</button>
+                </>
+              )}
+              <div style={{ marginTop: 2 }}>
+                <button
+                  onClick={() => switchAuthMode("signin")}
+                  style={{
+                    background: "none", border: "none", color: "rgba(147,197,253,0.9)",
+                    fontSize: 13, fontFamily: "'DM Sans', sans-serif", cursor: "pointer", padding: 0,
+                  }}
+                >Back to sign in</button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -1967,6 +2252,64 @@ function CircleScreen({ data, social }) {
             </div>
           </div>
         </>
+      )}
+
+      {social.backendReady && social.session && social.authRecoveryMode && (
+        <div style={{
+          background: "linear-gradient(135deg, rgba(245,158,11,0.14), rgba(217,119,6,0.08))",
+          border: "1px solid rgba(245,158,11,0.35)",
+          borderRadius: 18,
+          padding: 18,
+          marginBottom: 18,
+        }}>
+          <div style={{
+            fontSize: 16, fontWeight: 700, color: "#fcd34d", marginBottom: 10,
+            fontFamily: "'DM Sans', sans-serif",
+          }}>Update Your Password</div>
+          {passwordUpdated ? (
+            <div style={{
+              padding: "12px 14px", borderRadius: 12, background: "rgba(34,197,94,0.12)",
+              border: "1px solid rgba(34,197,94,0.3)", color: "#86efac", fontSize: 13,
+              fontFamily: "'DM Sans', sans-serif", lineHeight: 1.5,
+            }}>
+              Password updated successfully!
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <input
+                placeholder="New password (min 6 characters)"
+                type="password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                style={{
+                  width: "100%", background: "rgba(255,255,255,0.08)",
+                  border: "1px solid rgba(255,255,255,0.14)", borderRadius: 12,
+                  padding: "10px 12px", color: "#fff", fontSize: 14,
+                  fontFamily: "'DM Sans', sans-serif", outline: "none", boxSizing: "border-box",
+                }}
+              />
+              <button
+                disabled={busy || !newPassword || newPassword.length < 6}
+                onClick={() =>
+                  runAction(async () => {
+                    await social.authUpdatePassword(newPassword);
+                    setNewPassword("");
+                    setPasswordUpdated(true);
+                  })}
+                style={{
+                  width: "100%", padding: "12px 14px", borderRadius: 12, border: "none",
+                  background: busy || !newPassword || newPassword.length < 6
+                    ? "rgba(255,255,255,0.14)"
+                    : "linear-gradient(135deg, #f59e0b, #d97706)",
+                  color: "#fff", fontWeight: 700, fontSize: 14,
+                  cursor: busy || !newPassword || newPassword.length < 6 ? "default" : "pointer",
+                  fontFamily: "'DM Sans', sans-serif",
+                  opacity: busy || !newPassword || newPassword.length < 6 ? 0.5 : 1,
+                }}
+              >Update Password</button>
+            </div>
+          )}
+        </div>
       )}
 
       {(localError || social.error) && (
